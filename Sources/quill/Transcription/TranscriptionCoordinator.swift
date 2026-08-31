@@ -17,8 +17,11 @@ actor TranscriptionCoordinator {
     private var queue: [URL] = []
     private var draining = false
     private var engine: TranscriptionEngine?
+    private var engineChoice: TranscriptionEngineChoice?
     private var lastFailure: String?
     private var statusHandler: (@Sendable (Status) -> Void)?
+
+    init() {}
 
     func setStatusHandler(_ handler: @escaping @Sendable (Status) -> Void) {
         statusHandler = handler
@@ -33,6 +36,15 @@ actor TranscriptionCoordinator {
         }
         queue.append(sessionDir)
         drainIfIdle()
+    }
+
+    /// Explicit recovery path for a completed session. Unlike the startup
+    /// scan, this does not rely on queue timing and never touches raw audio.
+    func retranscribe(_ sessionDir: URL) async throws {
+        try await transcribe(sessionDir)
+        await engine?.release()
+        engine = nil
+        engineChoice = nil
     }
 
     /// Scan the recordings root for sessions that finished (meta.json exists)
@@ -99,7 +111,30 @@ actor TranscriptionCoordinator {
 
     private func transcribe(_ dir: URL) async throws {
         let meta = try SessionMeta.read(from: dir)
-        let engine = try await preparedEngine()
+        let engine = try await preparedEngine(for: meta)
+
+        if meta.exportMixedAudio {
+            do {
+                let mixed = dir.appendingPathComponent("mixed.m4a")
+                if !FileManager.default.fileExists(atPath: mixed.path) {
+                    log(dir, "exporting optional mixed.m4a (clean tracks remain primary for transcription)")
+                    try await MixedAudioExporter.export(
+                        inputs: meta.tracks.map {
+                            MixedAudioInput(
+                                url: dir.appendingPathComponent($0.file),
+                                offset: TimeInterval($0.offsetMs) / 1000
+                            )
+                        },
+                        to: mixed
+                    )
+                    try SessionMeta.recordMixedFile(in: dir)
+                }
+            } catch {
+                // A listening-copy failure must never cost the resilient
+                // separate-track transcript.
+                log(dir, "optional mixed-audio export failed: \(error)")
+            }
+        }
 
         var merged: [Transcript.Segment] = []
         for track in meta.tracks {
@@ -134,24 +169,52 @@ actor TranscriptionCoordinator {
             engine: engine.name,
             model: engine.model,
             created_at: ISO8601DateFormatter().string(from: Date()),
+            speaker_labels: meta.showSpeakerLabels,
+            timestamps: meta.showTimestamps,
             segments: merged
         )
         try transcript.write(to: dir)
         log(dir, "done — \(merged.count) segments")
     }
 
-    private func preparedEngine() async throws -> TranscriptionEngine {
-        if let engine { return engine }
-        let configured = Config.transcriptionEngine()
-        if configured != "parakeet" {
-            FileHandle.standardError.write(Data(
-                "warning: unknown transcription engine \"\(configured)\" — using parakeet\n".utf8
-            ))
+    private func preparedEngine(for meta: SessionMeta) async throws -> TranscriptionEngine {
+        if let engine, engineChoice == meta.engine { return engine }
+        await engine?.release()
+        engine = nil
+        engineChoice = nil
+
+        if meta.engine == .parakeet {
+            let engine = ParakeetEngine()
+            try await engine.prepare()
+            self.engine = engine
+            self.engineChoice = .parakeet
+            return engine
         }
-        let engine = ParakeetEngine()
-        try await engine.prepare()
-        self.engine = engine
-        return engine
+
+        if meta.engine == .hebrewCPU {
+            let engine = HebrewCPUWhisperEngine()
+            try await engine.prepare()
+            self.engine = engine
+            self.engineChoice = .hebrewCPU
+            return engine
+        }
+
+        do {
+            let engine = MLXWhisperEngine(language: meta.language)
+            try await engine.prepare()
+            self.engine = engine
+            self.engineChoice = .hebrewMLX
+            return engine
+        } catch {
+            FileHandle.standardError.write(Data(
+                "warning: Hebrew MLX unavailable (\(error)) — falling back to local English Parakeet\n".utf8
+            ))
+            let engine = ParakeetEngine()
+            try await engine.prepare()
+            self.engine = engine
+            self.engineChoice = .parakeet
+            return engine
+        }
     }
 
     /// Fires the configured on_stop shell command with the session directory
@@ -188,14 +251,19 @@ actor TranscriptionCoordinator {
 
 /// The slice of meta.json the coordinator needs: which files exist, who they
 /// represent, and how far each track started after the earliest one.
-private struct SessionMeta {
-    struct Track {
+struct SessionMeta {
+    struct Track: Sendable {
         let file: String
         let speaker: String
         let offsetMs: Int
     }
 
     let tracks: [Track]
+    let exportMixedAudio: Bool
+    let showSpeakerLabels: Bool
+    let showTimestamps: Bool
+    let language: TranscriptionLanguage
+    let engine: TranscriptionEngineChoice
 
     enum MetaError: Error, CustomStringConvertible {
         case unreadable(URL)
@@ -225,7 +293,29 @@ private struct SessionMeta {
         if let system = files["system"] {
             tracks.append(Track(file: system, speaker: "them", offsetMs: offsets["system"] ?? 0))
         }
-        return SessionMeta(tracks: tracks)
+        return SessionMeta(
+            tracks: tracks,
+            exportMixedAudio: (json["export_mixed_audio"] as? Bool)
+                ?? (Config.recordingOutput() == .separateWithMixedExport),
+            showSpeakerLabels: json["speaker_labels"] as? Bool ?? Config.showSpeakerLabels(),
+            showTimestamps: json["timestamps"] as? Bool ?? Config.showTimestamps(),
+            language: TranscriptionLanguage(rawValue: json["transcription_language"] as? String ?? "")
+                ?? Config.transcriptionLanguage(),
+            engine: TranscriptionEngineChoice(rawValue: json["transcription_engine"] as? String ?? "")
+                ?? Config.transcriptionEngineChoice()
+        )
+    }
+
+    static func recordMixedFile(in dir: URL) throws {
+        let url = dir.appendingPathComponent("meta.json")
+        guard let data = try? Data(contentsOf: url),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var files = json["files"] as? [String: String]
+        else { throw MetaError.unreadable(url) }
+        files["mixed"] = "mixed.m4a"
+        json["files"] = files
+        try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+            .write(to: url, options: .atomic)
     }
 }
 
@@ -242,6 +332,8 @@ private struct Transcript: Codable {
     let engine: String
     let model: String
     let created_at: String
+    let speaker_labels: Bool
+    let timestamps: Bool
     let segments: [Segment]
 
     /// Write transcript.json and render transcript.md. Both writes are atomic
@@ -259,7 +351,10 @@ private struct Transcript: Codable {
     private func rendered(title: String) -> String {
         var lines = ["# \(title)", "", "engine: \(engine) (\(model))", ""]
         for seg in segments {
-            lines.append("**[\(Self.clock(seg.start_ms))] \(seg.speaker):** \(seg.text)")
+            let time = timestamps ? "[\(Self.clock(seg.start_ms))]" : ""
+            let speaker = speaker_labels ? seg.speaker : ""
+            let prefix = [time, speaker].filter { !$0.isEmpty }.joined(separator: " ")
+            lines.append(prefix.isEmpty ? seg.text : "**\(prefix):** \(seg.text)")
             lines.append("")
         }
         return lines.joined(separator: "\n")

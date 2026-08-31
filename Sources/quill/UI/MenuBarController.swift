@@ -7,10 +7,12 @@ import AppKit
 final class MenuBarController {
     private let statusItem: NSStatusItem
     private let stateLabel: NSMenuItem
+    private let outputLabel: NSMenuItem
     private let transcriptionLabel: NSMenuItem
     private let toggleItem: NSMenuItem
 
     var onToggle: (() -> Void)?
+    var onOpenControls: (() -> Void)?
     var onOpenFolder: (() -> Void)?
     var onQuit: (() -> Void)?
 
@@ -24,12 +26,23 @@ final class MenuBarController {
         stateLabel.isEnabled = false
         menu.addItem(stateLabel)
 
+        outputLabel = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        outputLabel.isEnabled = false
+        menu.addItem(outputLabel)
+
         transcriptionLabel = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         transcriptionLabel.isEnabled = false
         transcriptionLabel.isHidden = true
         menu.addItem(transcriptionLabel)
 
         menu.addItem(.separator())
+
+        let openControls = NSMenuItem(
+            title: "Open controls…",
+            action: #selector(openControlsClicked),
+            keyEquivalent: ","
+        )
+        menu.addItem(openControls)
 
         toggleItem = NSMenuItem(
             title: "Start recording",
@@ -54,7 +67,7 @@ final class MenuBarController {
         )
         menu.addItem(quit)
 
-        for item in [toggleItem, openFolder, quit] {
+        for item in [openControls, toggleItem, openFolder, quit] {
             item.target = self
         }
 
@@ -86,6 +99,18 @@ final class MenuBarController {
         transcriptionLabel.isHidden = text == nil
     }
 
+    /// Make the active mode visible at the only persistent control surface.
+    /// Changing it is deliberately explicit (the config file or --mix-tracks)
+    /// so a meeting cannot silently lose the original speaker-separated flow.
+    func setOutputMode(_ output: Config.RecordingOutput) {
+        outputLabel.title = switch output {
+        case .separate:
+            "Transcript: chronological clean tracks — labels hidden"
+        case .separateWithMixedExport:
+            "Transcript: clean tracks; also exporting mixed.m4a (overlap can be less clear)"
+        }
+    }
+
     // Inlined Lucide feather SVG. Keeping it in source means the executable
     // has no separate resource bundle to install alongside it — true
     // single-binary.
@@ -109,6 +134,7 @@ final class MenuBarController {
     }
 
     @objc private func toggleClicked() { onToggle?() }
+    @objc private func openControlsClicked() { onOpenControls?() }
     @objc private func openFolderClicked() { onOpenFolder?() }
     @objc private func quitClicked() { onQuit?() }
 }

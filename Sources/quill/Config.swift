@@ -1,10 +1,35 @@
 import Foundation
 
+enum TranscriptionLanguage: String, CaseIterable, Sendable {
+    case automatic
+    case hebrew
+    case english
+}
+
+enum TranscriptionEngineChoice: String, CaseIterable, Sendable {
+    /// Tamlil's pinned Hebrew Whisper Large V3 Turbo MLX runtime.
+    case hebrewMLX = "mlx-hebrew"
+    /// FluidAudio's local Core ML Parakeet engine (English).
+    case parakeet
+    /// Tamlil's local faster-whisper Hebrew fallback.
+    case hebrewCPU = "hebrew-cpu"
+}
+
+struct RecordingOptions: Sendable {
+    var output: Config.RecordingOutput
+    var language: TranscriptionLanguage
+    var engine: TranscriptionEngineChoice
+    var showTimestamps: Bool
+    var showSpeakerLabels: Bool
+}
+
 /// Optional user config at ~/.config/quill/config.json:
 ///
 ///     {
 ///       "recordings_dir": "~/Recordings",
-///       "transcription": { "enabled": true, "engine": "parakeet" },
+///       "export_mixed_audio": false,
+///       "speaker_labels": false,
+///       "transcription": { "enabled": true, "engine": "mlx-hebrew" },
 ///       "mic_voice_processing": true,
 ///       "on_stop": "my-hook"
 ///     }
@@ -14,6 +39,24 @@ import Foundation
 /// directory as its argument — after the transcript is written, or right
 /// after recording when transcription is disabled.
 enum Config {
+    enum RecordingOutput: String, Sendable {
+        /// Keep and transcribe the original two-track workflow. This is the
+        /// default because it remains intelligible when people overlap.
+        case separate
+        /// Keep the two-track transcript and additionally render a listening
+        /// copy at mixed.m4a. The mixed file is never the primary transcript.
+        case separateWithMixedExport
+
+        static func parse(_ value: String?) -> Self {
+            // "mixed" was accepted by an unreleased build. Retain it as a
+            // compatibility alias, but never use it as the primary transcript.
+            switch value?.lowercased() {
+            case "mixed", "separate-with-mixed-export": .separateWithMixedExport
+            default: .separate
+            }
+        }
+    }
+
     static let path = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".config/quill/config.json")
 
@@ -38,10 +81,88 @@ enum Config {
         transcription()?["enabled"] as? Bool ?? true
     }
 
-    /// Configured engine name. Only "parakeet" ships today; the coordinator
-    /// warns and falls back for anything else.
+    /// Configured engine name. The local Hebrew MLX engine is preferred when
+    /// its already-provisioned runtime is usable; Parakeet remains a local
+    /// English fallback.
     static func transcriptionEngine() -> String {
-        transcription()?["engine"] as? String ?? "parakeet"
+        transcription()?["engine"] as? String ?? "mlx-hebrew"
+    }
+
+    static func transcriptionEngineChoice() -> TranscriptionEngineChoice {
+        TranscriptionEngineChoice(rawValue: transcriptionEngine().lowercased()) ?? .hebrewMLX
+    }
+
+    static func transcriptionLanguage() -> TranscriptionLanguage {
+        let raw = transcription()?["language"] as? String ?? "automatic"
+        return TranscriptionLanguage(rawValue: raw.lowercased()) ?? .automatic
+    }
+
+    /// Timestamps always remain in transcript.json for accurate ordering.
+    /// This controls whether they are shown in the reading-oriented Markdown.
+    static func showTimestamps() -> Bool {
+        transcription()?["timestamps"] as? Bool ?? true
+    }
+
+    static func recordingOutput() -> RecordingOutput {
+        let config = load()
+        if config?["export_mixed_audio"] as? Bool == true {
+            return .separateWithMixedExport
+        }
+        return RecordingOutput.parse(config?["recording_output"] as? String)
+    }
+
+    /// The readable Markdown transcript is chronological and intentionally
+    /// label-free by default. transcript.json always preserves `me`/`them`
+    /// for automation and for users who prefer the original workflow.
+    static func showSpeakerLabels() -> Bool {
+        load()?["speaker_labels"] as? Bool ?? false
+    }
+
+    static func recordingOptions(outputOverride: RecordingOutput? = nil) -> RecordingOptions {
+        RecordingOptions(
+            output: outputOverride ?? recordingOutput(),
+            language: transcriptionLanguage(),
+            engine: transcriptionEngineChoice(),
+            showTimestamps: showTimestamps(),
+            showSpeakerLabels: showSpeakerLabels()
+        )
+    }
+
+    /// The proven Tamlil runtime lives here by default. Both the interpreter
+    /// and model location can be overridden for another local macOS account;
+    /// no value is ever sent to a service.
+    static func mlxPython() -> URL {
+        if let configured = transcription()?["mlx_python"] as? String, !configured.isEmpty {
+            return URL(fileURLWithPath: (configured as NSString).expandingTildeInPath)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("venvs/mlx-whisper/bin/python")
+    }
+
+    static func mlxModelDirectory() -> URL {
+        if let configured = transcription()?["mlx_model_dir"] as? String, !configured.isEmpty {
+            return URL(fileURLWithPath: (configured as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                ".cache/huggingface/hub/models--mlx-community--ivrit-ai-whisper-large-v3-turbo-mlx/snapshots/53ad8c6cd8b32eb0303f093a404ae13c1b1d567f",
+                isDirectory: true
+            )
+    }
+
+    /// `auto` lets the Hebrew Whisper model preserve English turns in a mixed
+    /// meeting. Set `he` in config to force Hebrew-only decoding.
+    static func mlxLanguage() -> String {
+        let value = transcription()?["mlx_language"] as? String ?? "auto"
+        return value == "he" ? "he" : "auto"
+    }
+
+    static func cpuScript() -> URL {
+        if let configured = transcription()?["cpu_script"] as? String, !configured.isEmpty {
+            return URL(fileURLWithPath: (configured as NSString).expandingTildeInPath)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("bin/transcribe-hib-live")
     }
 
     private static func transcription() -> [String: Any]? {

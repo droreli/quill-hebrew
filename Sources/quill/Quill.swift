@@ -7,7 +7,7 @@ struct Quill: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "quill",
         abstract: "Local meeting recorder + transcriber. Records mic and system audio as two tracks, then transcribes on-device.",
-        subcommands: [Run.self, Doctor.self, Install.self],
+        subcommands: [Run.self, Doctor.self, Install.self, VerifyMix.self, VerifyMLX.self, Retranscribe.self],
         defaultSubcommand: Run.self
     )
 }
@@ -20,6 +20,15 @@ struct Run: ParsableCommand {
 
     @Option(name: .long, help: "Recordings root directory (overrides the config file).")
     var out: String?
+
+    @Flag(
+        name: .long,
+        help: "Also render mixed.m4a after each recording for listening. Quill still transcribes the two clean tracks and merges them chronologically, so overlapping voices stay clearer."
+    )
+    var exportMixedAudio = false
+
+    @Flag(name: .long, help: "Open the controls window without starting a recording.")
+    var controlsOnly = false
 
     func run() throws {
         // ArgumentParser invokes run() on the main thread; promote that fact
@@ -43,7 +52,11 @@ struct Run: ParsableCommand {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
 
-        let controller = AppController(root: root)
+        let output = exportMixedAudio
+            ? Config.RecordingOutput.separateWithMixedExport
+            : Config.recordingOutput()
+        let controller = AppController(root: root, options: Config.recordingOptions(outputOverride: output))
+        if controlsOnly { controller.showControls() }
 
         let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
         sigint.setEventHandler {
@@ -79,17 +92,33 @@ struct Doctor: ParsableCommand {
 @MainActor
 final class AppController {
     private let root: URL
+    private var options: RecordingOptions
     private let menuBar = MenuBarController()
-    private let transcription = TranscriptionCoordinator()
+    private let transcription: TranscriptionCoordinator
+    private let controls: ControlsWindowController
     private var session: RecordingSession?
+    private var latestSession: URL?
     private var ticker: Timer?
 
-    init(root: URL) {
+    init(root: URL, options: RecordingOptions) {
         self.root = root
+        self.options = options
+        self.transcription = TranscriptionCoordinator()
+        self.controls = ControlsWindowController(root: root, options: options)
         menuBar.onToggle = { [weak self] in self?.toggle() }
+        menuBar.onOpenControls = { [weak self] in self?.controls.show() }
         menuBar.onOpenFolder = { [weak self] in self?.openFolder() }
         menuBar.onQuit = { [weak self] in self?.shutdown() }
         menuBar.update(recording: false, elapsed: nil)
+        menuBar.setOutputMode(options.output)
+        controls.onOptionsChanged = { [weak self] options in
+            self?.options = options
+            self?.menuBar.setOutputMode(options.output)
+        }
+        controls.onToggleRecording = { [weak self] in self?.toggle() }
+        controls.onOpenRecordings = { [weak self] in self?.openFolder() }
+        controls.onOpenSession = { [weak self] in self?.openLatestSession() }
+        controls.update(isRecording: false, session: nil)
 
         Task { [transcription, root] in
             await transcription.setStatusHandler { status in
@@ -107,6 +136,8 @@ final class AppController {
         NSApp.terminate(nil)
     }
 
+    func showControls() { controls.show() }
+
     private func toggle() {
         if session == nil {
             startSession()
@@ -117,9 +148,14 @@ final class AppController {
 
     private func startSession() {
         do {
-            let newSession = try RecordingSession(root: root)
+            let newSession = try RecordingSession(
+                root: root,
+                options: options
+            )
             try newSession.start()
             session = newSession
+            latestSession = newSession.dir
+            controls.update(isRecording: true, session: newSession.dir)
             FileHandle.standardError.write(Data("● recording → \(newSession.dir.path)\n".utf8))
         } catch {
             FileHandle.standardError.write(Data("recording start failed: \(error)\n".utf8))
@@ -146,6 +182,7 @@ final class AppController {
         menuBar.update(recording: false, elapsed: nil)
 
         let dir = session.dir
+        controls.update(isRecording: false, session: dir)
         Task { [transcription] in await transcription.enqueue(dir) }
     }
 
@@ -173,6 +210,11 @@ final class AppController {
     private func openFolder() {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         NSWorkspace.shared.open(root)
+    }
+
+    private func openLatestSession() {
+        guard let latestSession else { return }
+        NSWorkspace.shared.open(latestSession)
     }
 
     private static func format(_ interval: TimeInterval) -> String {

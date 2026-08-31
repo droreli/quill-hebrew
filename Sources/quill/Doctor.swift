@@ -76,8 +76,9 @@ enum DoctorReport {
         return Check(name: "recordings folder", status: .ok, remediation: nil)
     }
 
-    /// Never discover a missing model after an important meeting: report
-    /// whether the parakeet models are already in FluidAudio's cache.
+    /// Never discover a missing local model after an important meeting. The
+    /// preferred Hebrew MLX runtime is entirely local; Parakeet is retained
+    /// as a local English fallback.
     static func checkTranscription() -> Check {
         guard Config.transcriptionEnabled() else {
             return Check(
@@ -86,6 +87,21 @@ enum DoctorReport {
                 remediation: nil
             )
         }
+        if Config.transcriptionEngine().lowercased() != "parakeet" {
+            let python = Config.mlxPython()
+            let model = Config.mlxModelDirectory()
+            if FileManager.default.isExecutableFile(atPath: python.path),
+               FileManager.default.fileExists(atPath: model.appendingPathComponent("config.json").path),
+               FileManager.default.fileExists(atPath: model.appendingPathComponent("weights.safetensors").path) {
+                return Check(name: "transcription", status: .ok, remediation: nil)
+            }
+            return Check(
+                name: "transcription",
+                status: .warn("Hebrew MLX runtime/model unavailable — will fall back to English Parakeet"),
+                remediation: "install the local MLX runtime and pinned model, or set transcription.engine to parakeet"
+            )
+        }
+
         let cache = AsrModels.defaultCacheDirectory(for: .v2)
         if AsrModels.modelsExist(at: cache, version: .v2) {
             return Check(name: "transcription", status: .ok, remediation: nil)

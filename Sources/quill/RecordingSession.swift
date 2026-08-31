@@ -10,6 +10,7 @@ final class RecordingSession {
 
     private let mic = MicRecorder()
     private let system = SystemAudioRecorder()
+    private let options: RecordingOptions
 
     private static let folderFormat: DateFormatter = {
         let f = DateFormatter()
@@ -20,7 +21,7 @@ final class RecordingSession {
 
     /// Create the session folder under `root` (yyyy.MM.dd-HHmm, suffixed on
     /// collision) without starting capture yet.
-    init(root: URL) throws {
+    init(root: URL, options: RecordingOptions) throws {
         let base = Self.folderFormat.string(from: startedAt)
         var candidate = root.appendingPathComponent(base, isDirectory: true)
         var n = 2
@@ -30,6 +31,7 @@ final class RecordingSession {
         }
         try FileManager.default.createDirectory(at: candidate, withIntermediateDirectories: true)
         dir = candidate
+        self.options = options
     }
 
     /// Start both tracks. If the mic fails after the system tap started, the
@@ -63,6 +65,11 @@ final class RecordingSession {
             "ended": iso.string(from: ended),
             "duration_seconds": Int(ended.timeIntervalSince(startedAt)),
             "files": ["mic": "mic.caf", "system": "system.caf"],
+            "export_mixed_audio": options.output == .separateWithMixedExport,
+            "speaker_labels": options.showSpeakerLabels,
+            "timestamps": options.showTimestamps,
+            "transcription_engine": options.engine.rawValue,
+            "transcription_language": options.language.rawValue,
             "start_offset_ms": [
                 "mic": Int(micStart.timeIntervalSince(earliest) * 1000),
                 "system": Int(systemStart.timeIntervalSince(earliest) * 1000),
