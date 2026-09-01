@@ -57,6 +57,8 @@ final class MeetingBriefViewModel {
             case .processing: "Generating locally"
             case .failed: "Generation needs attention"
             case .stale: "Brief needs regeneration"
+            case let .ready(brief) where brief.inputs.transcriptSegmentCount == 0:
+                "No transcript to summarize"
             case .ready: "Meeting brief ready"
             }
         }
@@ -71,6 +73,8 @@ final class MeetingBriefViewModel {
                 "Meeting brief generation failed. \(message)"
             case .stale:
                 "A previous brief is available, but its source notes or transcript have changed."
+            case let .ready(brief) where brief.inputs.transcriptSegmentCount == 0:
+                "The transcript contains no speech segments, so the local AI model was not contacted and no meeting summary was generated."
             case .ready:
                 "A generated meeting brief is ready to review."
             }
@@ -86,6 +90,11 @@ final class MeetingBriefViewModel {
         var isProcessing: Bool {
             if case .processing = self { return true }
             return false
+        }
+
+        var hasTranscriptCoverage: Bool {
+            guard let brief else { return true }
+            return brief.inputs.transcriptSegmentCount > 0
         }
     }
 

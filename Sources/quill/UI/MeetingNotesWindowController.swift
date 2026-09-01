@@ -176,6 +176,11 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         paragraph.lineBreakMode = .byWordWrapping
 
         editor.isRichText = false
+        // Plain NSTextView stores component-based foreground colors in its
+        // model. Input managers can insert concrete black even while the view
+        // is drawing in Dark Mode (notably when Quill starts from launchd).
+        // Let AppKit map those model colors to contrasting display colors.
+        editor.usesAdaptiveColorMappingForDarkAppearance = true
         editor.allowsUndo = true
         editor.usesFindBar = true
         editor.isAutomaticQuoteSubstitutionEnabled = false

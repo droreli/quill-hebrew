@@ -32,6 +32,24 @@ import Testing
 }
 
 @MainActor
+@Test func emptyTranscriptBriefClearlySaysLocalModelWasNotUsed() throws {
+    let input = SummaryInput(
+        transcriptSHA256: "empty",
+        transcriptSegmentCount: 0,
+        rawNotesRevision: 3
+    )
+    let brief = try MeetingBrief.incompleteTranscript(
+        input: input,
+        createdAt: "2026-09-01T14:05:10Z"
+    )
+    let state = MeetingBriefViewModel.State.ready(brief)
+
+    #expect(state.title == "No transcript to summarize")
+    #expect(state.hasTranscriptCoverage == false)
+    #expect(state.accessibilityDescription.contains("local AI model was not contacted"))
+}
+
+@MainActor
 @Test func successfulQuickNoteSaveClearsTheEditorWithoutLosingTheNote() throws {
     let viewModel = MeetingNotesViewModel()
     var command: MeetingNotesCommand?

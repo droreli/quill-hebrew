@@ -165,8 +165,15 @@ final class MeetingBriefWindowController: NSWindowController {
                 title: "This brief uses older inputs",
                 detail: "The current notes or transcript no longer match the source revision recorded below. Regenerate to create a current brief."
             ))
-        case .ready:
-            break
+        case let .ready(brief):
+            if brief.inputs.transcriptSegmentCount == 0 {
+                add(stateCard(
+                    symbolName: "waveform.slash",
+                    title: "No speech was transcribed",
+                    detail: "LM Studio was not contacted because this recording produced no transcript segments. Check the selected microphone or its input level, then record again before generating a brief.",
+                    tone: .systemOrange
+                ))
+            }
         }
 
         add(rawNotesCard())
@@ -176,6 +183,7 @@ final class MeetingBriefWindowController: NSWindowController {
     }
 
     private func configurePrimaryButton(for state: MeetingBriefViewModel.State) {
+        primaryButton.isEnabled = true
         switch state {
         case .processing:
             primaryButton.title = "Cancel generation"
@@ -197,6 +205,12 @@ final class MeetingBriefWindowController: NSWindowController {
             primaryButton.image = symbol("arrow.triangle.2.circlepath", size: 13, weight: .semibold)
             primaryButton.bezelColor = .controlAccentColor
             primaryButton.setAccessibilityLabel("Regenerate brief from the current source inputs")
+        case let .ready(brief) where brief.inputs.transcriptSegmentCount == 0:
+            primaryButton.title = "No transcript to summarize"
+            primaryButton.image = symbol("waveform.slash", size: 13, weight: .semibold)
+            primaryButton.bezelColor = .systemOrange
+            primaryButton.isEnabled = false
+            primaryButton.setAccessibilityLabel("No transcript is available to summarize")
         case .ready:
             primaryButton.title = "Regenerate brief"
             primaryButton.image = symbol("arrow.triangle.2.circlepath", size: 13, weight: .semibold)

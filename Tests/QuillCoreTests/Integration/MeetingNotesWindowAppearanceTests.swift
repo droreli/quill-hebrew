@@ -37,6 +37,12 @@ import Testing
     let editor = try #require(views.compactMap { $0 as? NSTextView }.first)
     editor.string = ""
     editor.setSelectedRange(NSRange(location: 0, length: 0))
+    // Reproduce the live failure mode: a launchd/input-manager path supplies
+    // concrete black model ink even though this shown editor is Dark Mode.
+    // Adaptive mapping must render that stored ink with visible contrast.
+    var inputAttributes = editor.typingAttributes
+    inputAttributes[.foregroundColor] = NSColor.black
+    editor.typingAttributes = inputAttributes
     for character in "עברית נראית במסך כהה וגם latin" {
         let insertionPoint = (editor.string as NSString).length
         editor.insertText(
@@ -44,6 +50,13 @@ import Testing
             replacementRange: NSRange(location: insertionPoint, length: 0)
         )
     }
+    let storedInk = try #require(
+        editor.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+    )
+    let storedRGB = try #require(storedInk.usingColorSpace(.sRGB))
+    #expect(storedRGB.brightnessComponent < 0.1)
+    _ = window.makeFirstResponder(nil)
+    editor.isEditable = false
     editor.displayIfNeeded()
     // Exercise the actual composited rendering path. Attribute-only checks
     // missed the original dark-mode defect because a visible caret could exist
