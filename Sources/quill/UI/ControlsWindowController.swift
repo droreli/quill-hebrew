@@ -1,8 +1,7 @@
 import AppKit
 
-/// A deliberately small pre-flight window. The menu-bar button remains the
-/// fastest way to start/stop; this window makes the consequential choices
-/// visible before a recording starts without exposing model identifiers.
+/// A native macOS pre-flight centre: explicit recording state, grouped choices,
+/// and one clear action. It keeps the menu-bar workflow and callbacks intact.
 @MainActor
 final class ControlsWindowController: NSWindowController {
     var onOptionsChanged: ((RecordingOptions) -> Void)?
@@ -13,28 +12,34 @@ final class ControlsWindowController: NSWindowController {
     private var options: RecordingOptions
     private let language = NSPopUpButton(frame: .zero, pullsDown: false)
     private let engine = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let timestamps = NSButton(checkboxWithTitle: "Show timestamps in the reading view", target: nil, action: nil)
-    private let speakers = NSButton(checkboxWithTitle: "Show speaker labels in the reading view", target: nil, action: nil)
-    private let mixedAudio = NSButton(checkboxWithTitle: "Also save mixed.m4a for listening", target: nil, action: nil)
+    private let timestamps = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let speakers = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let mixedAudio = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let recordingPath = NSTextField(labelWithString: "")
-    private let sessionPath = NSTextField(labelWithString: "No recording completed yet")
+    private let sessionPath = NSTextField(labelWithString: "No completed recording yet")
+    private let engineDetail = NSTextField(labelWithString: "")
+    private let statusPill = RecordingStatusPill()
     private let startStop = NSButton(title: "Start recording", target: nil, action: nil)
-    private let sessionButton = NSButton(title: "Reveal latest session", target: nil, action: nil)
+    private let sessionButton = NSButton(title: "Reveal", target: nil, action: nil)
 
     init(root: URL, options: RecordingOptions) {
         self.options = options
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 570),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        window.title = "Quill controls"
+        window.title = "Quill"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.minSize = NSSize(width: 560, height: 640)
         window.isReleasedWhenClosed = false
         super.init(window: window)
         build(root: root)
         apply(options)
-        sessionButton.isEnabled = false
+        update(isRecording: false, session: nil)
     }
 
     @available(*, unavailable)
@@ -46,22 +51,30 @@ final class ControlsWindowController: NSWindowController {
     }
 
     func update(isRecording: Bool, session: URL?) {
-        startStop.title = isRecording ? "Stop recording" : "Start recording"
-        language.isEnabled = !isRecording
-        engine.isEnabled = !isRecording
-        timestamps.isEnabled = !isRecording
-        speakers.isEnabled = !isRecording
-        mixedAudio.isEnabled = !isRecording
+        applyRecordingState(isRecording)
+        [language, engine, timestamps, speakers, mixedAudio].forEach { $0.isEnabled = !isRecording }
         if let session {
-            sessionPath.stringValue = session.path
+            sessionPath.stringValue = session.lastPathComponent
+            sessionPath.toolTip = session.path
+            sessionPath.setAccessibilityValue(session.path)
             sessionButton.isEnabled = true
         }
     }
 
     private func build(root: URL) {
         let content = NSView()
+        content.wantsLayer = true
+        content.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         content.translatesAutoresizingMaskIntoConstraints = false
         window?.contentView = content
+
+        configureControls()
+        recordingPath.stringValue = abbreviatedPath(root)
+        recordingPath.toolTip = root.path
+        recordingPath.setAccessibilityValue(root.path)
+        sessionPath.lineBreakMode = .byTruncatingMiddle
+        sessionPath.textColor = .secondaryLabelColor
+
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -71,42 +84,192 @@ final class ControlsWindowController: NSWindowController {
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -22),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 48),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -24),
         ])
 
-        let title = NSTextField(labelWithString: "Meeting recording")
-        title.font = .systemFont(ofSize: 22, weight: .bold)
-        stack.addArrangedSubview(title)
-        stack.addArrangedSubview(label("Quill keeps your mic and system audio as separate clean tracks, then merges their timed transcript into one reading view. This keeps overlap understandable."))
+        [header(), recordingSetupCard(), readingAndOutputCard(), storageCard(), actionFooter()].forEach {
+            stack.addArrangedSubview($0)
+            $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+    }
 
+    private func configureControls() {
         language.addItems(withTitles: ["Automatic / mixed", "Hebrew", "English"])
-        language.target = self
-        language.action = #selector(changed)
-        stack.addArrangedSubview(row("Language", language))
-
         engine.addItems(withTitles: ["Hebrew GPU (recommended)", "English local", "Hebrew CPU fallback"])
-        engine.target = self
-        engine.action = #selector(changed)
-        stack.addArrangedSubview(row("Transcription", engine))
-
-        for control in [timestamps, speakers, mixedAudio] {
+        for control in [language, engine] {
+            control.controlSize = .large
             control.target = self
             control.action = #selector(changed)
-            stack.addArrangedSubview(control)
+            control.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
-        stack.addArrangedSubview(label("The optional mixed file is convenient for playback, but overlapping voices can be less clear. It is never used as the primary transcript."))
+        language.setAccessibilityLabel("Transcription language")
+        engine.setAccessibilityLabel("Transcription engine")
 
-        recordingPath.stringValue = root.path
-        recordingPath.lineBreakMode = .byTruncatingMiddle
-        sessionPath.lineBreakMode = .byTruncatingMiddle
-        stack.addArrangedSubview(section("Recording folder", recordingPath, title: "Reveal recordings", action: #selector(revealRecordings)))
-        stack.addArrangedSubview(section("Latest recording / transcript", sessionPath, title: "Reveal latest session", action: #selector(revealSession), button: sessionButton))
+        for (control, title, help) in [
+            (timestamps, "Show timestamps", "Add a time marker to each transcript segment."),
+            (speakers, "Show speaker labels", "Label microphone and system-audio speakers."),
+            (mixedAudio, "Save a listening copy", "Exports mixed.m4a. Clean tracks remain the transcript source."),
+        ] {
+            control.setButtonType(.switch)
+            control.title = ""
+            control.target = self
+            control.action = #selector(changed)
+            control.setAccessibilityLabel(title)
+            control.setAccessibilityHelp(help)
+        }
+        sessionButton.target = self
+        sessionButton.action = #selector(revealSession)
+        sessionButton.bezelStyle = .rounded
+        sessionButton.image = symbol("arrow.up.forward.app", size: 12, weight: .medium)
+        sessionButton.imagePosition = .imageLeading
+        sessionButton.setAccessibilityLabel("Reveal latest recording")
 
         startStop.target = self
         startStop.action = #selector(toggle)
         startStop.bezelStyle = .rounded
-        stack.addArrangedSubview(startStop)
+        startStop.controlSize = .large
+        startStop.imagePosition = .imageLeading
+        startStop.heightAnchor.constraint(equalToConstant: 48).isActive = true
+    }
+
+    private func header() -> NSView {
+        let tile = NSView()
+        tile.wantsLayer = true
+        tile.layer?.cornerRadius = 11
+        tile.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        tile.widthAnchor.constraint(equalToConstant: 42).isActive = true
+        tile.heightAnchor.constraint(equalToConstant: 42).isActive = true
+        let image = NSImageView(image: MenuBarController.featherImage(size: 21) ?? symbol("waveform", size: 18, weight: .semibold)!)
+        image.contentTintColor = .white
+        image.translatesAutoresizingMaskIntoConstraints = false
+        tile.addSubview(image)
+        NSLayoutConstraint.activate([
+            image.centerXAnchor.constraint(equalTo: tile.centerXAnchor),
+            image.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
+            image.widthAnchor.constraint(equalToConstant: 21),
+            image.heightAnchor.constraint(equalToConstant: 21),
+        ])
+        let title = label("Quill", size: 24, weight: .semibold)
+        let subtitle = label("Private meeting capture", size: 12, weight: .medium, color: .secondaryLabelColor)
+        let detail = label("Microphone + system audio · processed locally", size: 11, weight: .regular, color: .tertiaryLabelColor)
+        let copy = vertical([title, subtitle, detail], spacing: 1)
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return horizontal([tile, copy, spacer, statusPill], spacing: 12, alignment: .centerY)
+    }
+
+    private func recordingSetupCard() -> NSView {
+        let selectors = horizontal([
+            selectorColumn("Language", "Choose how the next recording is decoded.", language),
+            selectorColumn("Transcription", "All engines run locally on this Mac.", engine, trailingDetail: engineDetail),
+        ], spacing: 14, alignment: .top)
+        selectors.distribution = .fillEqually
+        return card("waveform", "Recording setup", "Choose the language and local transcription engine before recording.", selectors, "Recording setup")
+    }
+
+    private func readingAndOutputCard() -> NSView {
+        let rows = vertical([
+            preferenceRow("clock", "Show timestamps", "Add a time marker to each transcript segment.", timestamps),
+            separator(),
+            preferenceRow("person.2", "Show speaker labels", "Label microphone and system-audio speakers.", speakers),
+            separator(),
+            preferenceRow("speaker.wave.2", "Save a listening copy", "Exports mixed.m4a; clean tracks remain the transcript source.", mixedAudio),
+        ], spacing: 0)
+        return card("text.bubble", "Reading & output", "Keep the transcript as concise or detailed as you need.", rows, "Reading and output options")
+    }
+
+    private func storageCard() -> NSView {
+        let rows = vertical([
+            locationRow("folder", "Recording folder", recordingPath, action: #selector(revealRecordings)),
+            separator(),
+            locationRow("doc.text", "Latest transcript", sessionPath, action: #selector(revealSession), button: sessionButton),
+        ], spacing: 0)
+        return card("internaldrive", "Files", "Your recordings stay in a local folder you control.", rows, "Recording files")
+    }
+
+    private func actionFooter() -> NSView {
+        let helper = label("⌘R also starts or stops recording from the menu bar", size: 11, weight: .regular, color: .tertiaryLabelColor)
+        helper.alignment = .center
+        return vertical([separator(), startStop, helper], spacing: 9)
+    }
+
+    private func card(_ symbolName: String, _ title: String, _ subtitle: String, _ body: NSView, _ accessibilityLabel: String) -> NSView {
+        let icon = NSImageView(image: symbol(symbolName, size: 14, weight: .semibold)!)
+        icon.contentTintColor = .controlAccentColor
+        let heading = label(title, size: 14, weight: .semibold)
+        let copy = NSTextField(wrappingLabelWithString: subtitle)
+        copy.font = .systemFont(ofSize: 12, weight: .regular)
+        copy.textColor = .secondaryLabelColor
+        let content = vertical([horizontal([icon, heading], spacing: 7, alignment: .centerY), copy, body], spacing: 8)
+        let result = RoundedCardView(content: content)
+        result.setAccessibilityLabel(accessibilityLabel)
+        return result
+    }
+
+    private func selectorColumn(_ title: String, _ detail: String, _ control: NSView, trailingDetail: NSTextField? = nil) -> NSView {
+        let heading = label(title, size: 11, weight: .semibold, color: .secondaryLabelColor)
+        let help = label(detail, size: 11, weight: .regular, color: .tertiaryLabelColor)
+        let parts = [heading, control, trailingDetail, help].compactMap { $0 }
+        let stack = vertical(parts, spacing: 5)
+        control.widthAnchor.constraint(greaterThanOrEqualToConstant: 230).isActive = true
+        if let trailingDetail {
+            trailingDetail.font = .systemFont(ofSize: 11, weight: .medium)
+            trailingDetail.textColor = .secondaryLabelColor
+            trailingDetail.lineBreakMode = .byTruncatingTail
+        }
+        return stack
+    }
+
+    private func preferenceRow(_ symbolName: String, _ title: String, _ subtitle: String, _ control: NSButton) -> NSView {
+        let heading = label(title, size: 13, weight: .medium)
+        let detail = NSTextField(wrappingLabelWithString: subtitle)
+        detail.font = .systemFont(ofSize: 11, weight: .regular)
+        detail.textColor = .secondaryLabelColor
+        let copy = vertical([heading, detail], spacing: 2)
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let row = horizontal([iconTile(symbolName), copy, spacer, control], spacing: 10, alignment: .centerY)
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 52).isActive = true
+        return row
+    }
+
+    private func locationRow(_ symbolName: String, _ title: String, _ path: NSTextField, action: Selector, button: NSButton? = nil) -> NSView {
+        let button = button ?? NSButton(title: "Reveal", target: self, action: action)
+        button.target = self
+        button.action = action
+        button.bezelStyle = .rounded
+        if button.image == nil {
+            button.image = symbol("arrow.up.forward.app", size: 12, weight: .medium)
+            button.imagePosition = .imageLeading
+        }
+        let heading = label(title, size: 13, weight: .medium)
+        path.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        path.textColor = .secondaryLabelColor
+        path.lineBreakMode = .byTruncatingMiddle
+        let copy = vertical([heading, path], spacing: 2)
+        copy.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let row = horizontal([iconTile(symbolName), copy, button], spacing: 10, alignment: .centerY)
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 52).isActive = true
+        return row
+    }
+
+    private func iconTile(_ name: String) -> NSView {
+        let tile = NSView()
+        tile.wantsLayer = true
+        tile.layer?.cornerRadius = 8
+        tile.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.14).cgColor
+        tile.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        tile.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        let image = NSImageView(image: symbol(name, size: 13, weight: .medium)!)
+        image.contentTintColor = .controlAccentColor
+        image.translatesAutoresizingMaskIntoConstraints = false
+        tile.addSubview(image)
+        NSLayoutConstraint.activate([
+            image.centerXAnchor.constraint(equalTo: tile.centerXAnchor),
+            image.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
+        ])
+        return tile
     }
 
     private func apply(_ options: RecordingOptions) {
@@ -115,51 +278,73 @@ final class ControlsWindowController: NSWindowController {
         case .hebrew: 1
         case .english: 2
         }
-        language.selectItem(at: languageIndex)
         let engineIndex: Int = switch options.engine {
         case .hebrewMLX: 0
         case .parakeet: 1
         case .hebrewCPU: 2
         }
+        language.selectItem(at: languageIndex)
         engine.selectItem(at: engineIndex)
         timestamps.state = options.showTimestamps ? .on : .off
         speakers.state = options.showSpeakerLabels ? .on : .off
         mixedAudio.state = options.output == .separateWithMixedExport ? .on : .off
+        updateEngineDetail()
     }
 
-    private func row(_ title: String, _ control: NSView) -> NSView {
-        let stack = NSStackView(views: [NSTextField(labelWithString: title), control])
-        stack.orientation = .horizontal
-        stack.spacing = 18
-        stack.alignment = .centerY
-        stack.distribution = .fill
-        stack.arrangedSubviews[0].widthAnchor.constraint(equalToConstant: 120).isActive = true
-        control.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
-        return stack
+    private func applyRecordingState(_ recording: Bool) {
+        statusPill.set(recording: recording)
+        startStop.title = recording ? "Stop recording" : "Start recording"
+        startStop.image = symbol(recording ? "stop.circle.fill" : "record.circle", size: 16, weight: .semibold)
+        startStop.bezelColor = recording ? .systemRed : .controlAccentColor
+        startStop.setAccessibilityLabel(startStop.title)
     }
 
-    private func section(_ title: String, _ path: NSTextField, title buttonTitle: String, action: Selector, button: NSButton? = nil) -> NSView {
-        let button = button ?? NSButton(title: buttonTitle, target: self, action: action)
-        button.target = self
-        button.action = action
-        let heading = NSTextField(labelWithString: title)
-        heading.font = .systemFont(ofSize: 12, weight: .semibold)
-        let line = NSStackView(views: [path, button])
-        line.orientation = .horizontal
-        line.alignment = .centerY
-        line.distribution = .fill
-        path.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let result = NSStackView(views: [heading, line])
-        result.orientation = .vertical
-        result.spacing = 3
+    private func updateEngineDetail() {
+        engineDetail.stringValue = switch options.engine {
+        case .hebrewMLX: "Whisper Large V3 Turbo · MLX · Apple Silicon"
+        case .parakeet: "Parakeet TDT 0.6B v2 · Core ML"
+        case .hebrewCPU: "Local Hebrew fallback · slower"
+        }
+    }
+
+    private func abbreviatedPath(_ url: URL) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return url.path.hasPrefix(home) ? "~" + url.path.dropFirst(home.count) : url.path
+    }
+
+    private func label(_ text: String, size: CGFloat, weight: NSFont.Weight, color: NSColor = .labelColor) -> NSTextField {
+        let result = NSTextField(labelWithString: text)
+        result.font = .systemFont(ofSize: size, weight: weight)
+        result.textColor = color
         return result
     }
 
-    private func label(_ text: String) -> NSTextField {
-        let field = NSTextField(wrappingLabelWithString: text)
-        field.textColor = .secondaryLabelColor
-        field.maximumNumberOfLines = 0
-        return field
+    private func vertical(_ views: [NSView], spacing: CGFloat) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = spacing
+        return stack
+    }
+
+    private func horizontal(_ views: [NSView], spacing: CGFloat, alignment: NSLayoutConstraint.Attribute) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .horizontal
+        stack.alignment = alignment
+        stack.spacing = spacing
+        return stack
+    }
+
+    private func separator() -> NSView {
+        let rule = NSView()
+        rule.wantsLayer = true
+        rule.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        rule.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        return rule
+    }
+
+    private func symbol(_ name: String, size: CGFloat, weight: NSFont.Weight) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: size, weight: weight))
     }
 
     @objc private func changed() {
@@ -168,27 +353,73 @@ final class ControlsWindowController: NSWindowController {
         case 2: .english
         default: .automatic
         }
-        // Keep the first useful choice friendly: Hebrew/automatic starts with
-        // the proven GPU model; selecting English switches that default to the
-        // local English engine. The CPU fallback is never overridden.
-        if selectedLanguage == .english, options.engine == .hebrewMLX {
-            engine.selectItem(at: 1)
-        } else if selectedLanguage == .hebrew, options.engine == .parakeet {
-            engine.selectItem(at: 0)
-        }
+        if selectedLanguage == .english, options.engine == .hebrewMLX { engine.selectItem(at: 1) }
+        if selectedLanguage == .hebrew, options.engine == .parakeet { engine.selectItem(at: 0) }
         options.language = selectedLanguage
-        options.engine = switch engine.indexOfSelectedItem {
-        case 1: .parakeet
-        case 2: .hebrewCPU
-        default: .hebrewMLX
-        }
+        options.engine = switch engine.indexOfSelectedItem { case 1: .parakeet; case 2: .hebrewCPU; default: .hebrewMLX }
         options.showTimestamps = timestamps.state == .on
         options.showSpeakerLabels = speakers.state == .on
         options.output = mixedAudio.state == .on ? .separateWithMixedExport : .separate
+        updateEngineDetail()
         onOptionsChanged?(options)
     }
 
     @objc private func toggle() { onToggleRecording?() }
     @objc private func revealRecordings() { onOpenRecordings?() }
     @objc private func revealSession() { onOpenSession?() }
+}
+
+private final class RoundedCardView: NSView {
+    init(content: NSView) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            content.topAnchor.constraint(equalTo: topAnchor, constant: 15),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -15),
+        ])
+        refreshAppearance()
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { nil }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refreshAppearance() }
+    private func refreshAppearance() {
+        layer?.cornerRadius = 12
+        layer?.borderWidth = 1
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.borderColor = NSColor.separatorColor.cgColor
+    }
+}
+
+private final class RecordingStatusPill: NSView {
+    private let dot = NSView()
+    private let label = NSTextField(labelWithString: "Ready")
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        dot.wantsLayer = true
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(dot); addSubview(label)
+        NSLayoutConstraint.activate([
+            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), dot.centerYAnchor.constraint(equalTo: centerYAnchor),
+            dot.widthAnchor.constraint(equalToConstant: 7), dot.heightAnchor.constraint(equalToConstant: 7),
+            label.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 6), label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor), heightAnchor.constraint(equalToConstant: 28),
+        ])
+        set(recording: false)
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { nil }
+    func set(recording: Bool) {
+        label.stringValue = recording ? "Recording" : "Ready"
+        label.textColor = recording ? .systemRed : .secondaryLabelColor
+        setAccessibilityLabel(recording ? "Recording in progress" : "Ready to record")
+        layer?.cornerRadius = 14
+        layer?.backgroundColor = (recording ? NSColor.systemRed : NSColor.quaternaryLabelColor).withAlphaComponent(recording ? 0.15 : 0.12).cgColor
+        dot.layer?.cornerRadius = 3.5
+        dot.layer?.backgroundColor = (recording ? NSColor.systemRed : NSColor.systemGreen).cgColor
+    }
 }

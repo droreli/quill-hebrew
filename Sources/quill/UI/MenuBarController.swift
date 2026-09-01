@@ -22,7 +22,7 @@ final class MenuBarController {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        stateLabel = NSMenuItem(title: "idle", action: nil, keyEquivalent: "")
+        stateLabel = NSMenuItem(title: "Ready", action: nil, keyEquivalent: "")
         stateLabel.isEnabled = false
         menu.addItem(stateLabel)
 
@@ -42,6 +42,7 @@ final class MenuBarController {
             action: #selector(openControlsClicked),
             keyEquivalent: ","
         )
+        openControls.image = Self.symbol("slider.horizontal.3")
         menu.addItem(openControls)
 
         toggleItem = NSMenuItem(
@@ -49,6 +50,7 @@ final class MenuBarController {
             action: #selector(toggleClicked),
             keyEquivalent: "r"
         )
+        toggleItem.image = Self.symbol("record.circle")
         menu.addItem(toggleItem)
 
         let openFolder = NSMenuItem(
@@ -56,6 +58,7 @@ final class MenuBarController {
             action: #selector(openFolderClicked),
             keyEquivalent: "o"
         )
+        openFolder.image = Self.symbol("folder")
         menu.addItem(openFolder)
 
         menu.addItem(.separator())
@@ -65,6 +68,7 @@ final class MenuBarController {
             action: #selector(quitClicked),
             keyEquivalent: "q"
         )
+        quit.image = Self.symbol("power")
         menu.addItem(quit)
 
         for item in [openControls, toggleItem, openFolder, quit] {
@@ -74,7 +78,7 @@ final class MenuBarController {
         statusItem.menu = menu
 
         if let button = statusItem.button {
-            let image = Self.featherImage()
+            let image = Self.featherImage(size: 16)
             image?.isTemplate = true
             button.image = image
             button.imagePosition = .imageLeft
@@ -86,8 +90,9 @@ final class MenuBarController {
     /// counter lives in the menu's state label. Call once a second while
     /// recording.
     func update(recording: Bool, elapsed: String?) {
-        stateLabel.title = recording ? "● recording · \(elapsed ?? "0:00")" : "idle"
+        stateLabel.title = recording ? "Recording · \(elapsed ?? "0:00")" : "Ready"
         toggleItem.title = recording ? "Stop recording" : "Start recording"
+        toggleItem.image = Self.symbol(recording ? "stop.circle.fill" : "record.circle")
         statusItem.button?.contentTintColor = recording ? .systemRed : nil
     }
 
@@ -105,9 +110,9 @@ final class MenuBarController {
     func setOutputMode(_ output: Config.RecordingOutput) {
         outputLabel.title = switch output {
         case .separate:
-            "Transcript: chronological clean tracks — labels hidden"
+            "Clean tracks · labels hidden"
         case .separateWithMixedExport:
-            "Transcript: clean tracks; also exporting mixed.m4a (overlap can be less clear)"
+            "Clean tracks + mixed listening copy"
         }
     }
 
@@ -124,13 +129,19 @@ final class MenuBarController {
     </svg>
     """
 
-    private static func featherImage() -> NSImage? {
+    static func featherImage(size: CGFloat) -> NSImage? {
         guard let data = featherSVG.data(using: .utf8),
               let image = NSImage(data: data)
         else { return nil }
         // Menu-bar status icons are nominally 18pt tall; size the SVG to match.
-        image.size = NSSize(width: 16, height: 16)
+        image.size = NSSize(width: size, height: size)
         return image
+    }
+
+    private static func symbol(_ name: String) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(
+            .init(pointSize: 13, weight: .medium)
+        )
     }
 
     @objc private func toggleClicked() { onToggle?() }
