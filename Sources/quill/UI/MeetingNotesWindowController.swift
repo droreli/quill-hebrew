@@ -4,14 +4,16 @@ import AppKit
 /// persistence dependency: callers bind a `MeetingNotesViewModel` and handle
 /// its commands in their own session/persistence layer.
 @MainActor
-final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate {
+final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate, NSTableViewDataSource, NSTableViewDelegate {
     let viewModel: MeetingNotesViewModel
 
     private let templateSelector = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let editor = NotesTextView(frame: .zero)
+    private let editor: NSTextView
     private let editorScrollView = NSScrollView()
-    private let noteList = NSStackView()
+    private let noteTable = NSTableView()
     private let noteListScrollView = NSScrollView()
+    private let noteListContainer = NSView()
+    private let noteListEmptyState = NSTextField(wrappingLabelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private let saveButton = NSButton(title: "Add note", target: nil, action: nil)
     private let newNoteButton = NSButton(title: "New", target: nil, action: nil)
@@ -25,6 +27,7 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
 
     init(viewModel: MeetingNotesViewModel) {
         self.viewModel = viewModel
+        self.editor = Self.makeEditor()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 780, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
@@ -92,20 +95,7 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         templateSelector.setAccessibilityLabel("Meeting note template")
         templateSelector.setAccessibilityHelp("Choose a starting structure for a new note.")
 
-        editor.isRichText = false
-        editor.allowsUndo = true
-        editor.usesFindBar = true
-        editor.isAutomaticQuoteSubstitutionEnabled = false
-        editor.font = .systemFont(ofSize: 15)
-        editor.backgroundColor = .textBackgroundColor
-        editor.drawsBackground = true
-        editor.insertionPointColor = .controlAccentColor
-        editor.isVerticallyResizable = true
-        editor.isHorizontallyResizable = false
-        editor.textContainer?.widthTracksTextView = true
-        editor.textContainerInset = NSSize(width: 12, height: 12)
-        editor.baseWritingDirection = .natural
-        editor.delegate = self
+        configureEditor()
         editor.setAccessibilityLabel("Meeting note editor")
         editor.setAccessibilityHelp("Write a note using headings and bullets. Command Return saves it.")
         editorScrollView.hasVerticalScroller = true
@@ -114,29 +104,23 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         editorScrollView.drawsBackground = true
         editorScrollView.backgroundColor = .textBackgroundColor
         editorScrollView.documentView = editor
-        editor.applyReadableAppearance()
-
-        noteList.orientation = .vertical
-        noteList.alignment = .leading
-        noteList.spacing = 8
-        noteList.translatesAutoresizingMaskIntoConstraints = false
-        let noteListContent = FlippedContentView()
-        noteListContent.translatesAutoresizingMaskIntoConstraints = false
-        noteListContent.addSubview(noteList)
+        configureNoteTable()
+        noteListContainer.translatesAutoresizingMaskIntoConstraints = false
+        noteListContainer.addSubview(noteListScrollView)
+        noteListContainer.addSubview(noteListEmptyState)
+        noteListScrollView.translatesAutoresizingMaskIntoConstraints = false
+        noteListEmptyState.translatesAutoresizingMaskIntoConstraints = false
+        noteListEmptyState.font = .systemFont(ofSize: 12)
+        noteListEmptyState.textColor = .secondaryLabelColor
+        noteListEmptyState.alignment = .center
         NSLayoutConstraint.activate([
-            noteList.leadingAnchor.constraint(equalTo: noteListContent.leadingAnchor),
-            noteList.trailingAnchor.constraint(equalTo: noteListContent.trailingAnchor),
-            noteList.topAnchor.constraint(equalTo: noteListContent.topAnchor),
-            noteList.bottomAnchor.constraint(equalTo: noteListContent.bottomAnchor),
-            noteList.widthAnchor.constraint(equalTo: noteListContent.widthAnchor),
-        ])
-        noteListScrollView.hasVerticalScroller = true
-        noteListScrollView.autohidesScrollers = true
-        noteListScrollView.borderType = .bezelBorder
-        noteListScrollView.documentView = noteListContent
-        NSLayoutConstraint.activate([
-            noteListContent.widthAnchor.constraint(equalTo: noteListScrollView.contentView.widthAnchor),
-            noteListContent.heightAnchor.constraint(greaterThanOrEqualTo: noteListScrollView.contentView.heightAnchor),
+            noteListScrollView.leadingAnchor.constraint(equalTo: noteListContainer.leadingAnchor),
+            noteListScrollView.trailingAnchor.constraint(equalTo: noteListContainer.trailingAnchor),
+            noteListScrollView.topAnchor.constraint(equalTo: noteListContainer.topAnchor),
+            noteListScrollView.bottomAnchor.constraint(equalTo: noteListContainer.bottomAnchor),
+            noteListEmptyState.leadingAnchor.constraint(equalTo: noteListContainer.leadingAnchor, constant: 16),
+            noteListEmptyState.trailingAnchor.constraint(equalTo: noteListContainer.trailingAnchor, constant: -16),
+            noteListEmptyState.centerYAnchor.constraint(equalTo: noteListContainer.centerYAnchor),
         ])
         noteListScrollView.setAccessibilityLabel("Saved meeting notes")
 
@@ -170,6 +154,78 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         statusLabel.setAccessibilityLabel("Notes save status")
     }
 
+    /// Build the editor with a normal explicit TextKit stack. The previous
+    /// subclass rewrote its storage and typing attributes during every edit;
+    /// that conflicts with AppKit's complex-script composition path. Keeping
+    /// the input manager in charge of its runs is the native rendering route.
+    private static func makeEditor() -> NSTextView {
+        let storage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(container)
+        return NSTextView(frame: .zero, textContainer: container)
+    }
+
+    private func configureEditor() {
+        let font = NSFont.systemFont(ofSize: 15)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .natural
+        paragraph.baseWritingDirection = .natural
+        paragraph.lineBreakMode = .byWordWrapping
+
+        editor.isRichText = false
+        editor.allowsUndo = true
+        editor.usesFindBar = true
+        editor.isAutomaticQuoteSubstitutionEnabled = false
+        editor.font = font
+        editor.textColor = .labelColor
+        editor.backgroundColor = .textBackgroundColor
+        editor.drawsBackground = true
+        editor.insertionPointColor = .controlAccentColor
+        editor.isVerticallyResizable = true
+        editor.isHorizontallyResizable = false
+        editor.minSize = .zero
+        editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        editor.textContainer?.widthTracksTextView = true
+        editor.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        editor.textContainerInset = NSSize(width: 12, height: 12)
+        editor.baseWritingDirection = .natural
+        editor.defaultParagraphStyle = paragraph
+        editor.typingAttributes = [
+            .font: font,
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraph,
+        ]
+        editor.delegate = self
+        editor.setAccessibilityLabel("Meeting note editor")
+        editor.setAccessibilityHelp("Write a note using headings and bullets. Command Return saves it.")
+    }
+
+    private func configureNoteTable() {
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("saved-note"))
+        column.resizingMask = .autoresizingMask
+        noteTable.addTableColumn(column)
+        noteTable.headerView = nil
+        noteTable.delegate = self
+        noteTable.dataSource = self
+        noteTable.rowHeight = 72
+        noteTable.intercellSpacing = NSSize(width: 0, height: 6)
+        noteTable.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        noteTable.selectionHighlightStyle = .regular
+        noteTable.usesAlternatingRowBackgroundColors = false
+        noteTable.backgroundColor = .clear
+        noteTable.focusRingType = .none
+
+        noteListScrollView.hasVerticalScroller = true
+        noteListScrollView.autohidesScrollers = true
+        noteListScrollView.borderType = .bezelBorder
+        noteListScrollView.drawsBackground = true
+        noteListScrollView.backgroundColor = .controlBackgroundColor
+        noteListScrollView.documentView = noteTable
+    }
+
     private func buildHeader() -> NSView {
         let icon = NSImageView(image: symbol("note.text", size: 18)!)
         icon.contentTintColor = .controlAccentColor
@@ -189,11 +245,11 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         let editorHeader = stack([editorTitle, editorHint], orientation: .horizontal, spacing: 8, alignment: .centerY)
         let editorColumn = stack([editorHeader, editorScrollView], orientation: .vertical, spacing: 7)
         let listTitle = label("Saved notes", size: 13, weight: .semibold)
-        let listColumn = stack([listTitle, noteListScrollView], orientation: .vertical, spacing: 7)
+        let listColumn = stack([listTitle, noteListContainer], orientation: .vertical, spacing: 7)
         let result = stack([editorColumn, listColumn], orientation: .horizontal, spacing: 16, alignment: .top)
         result.distribution = .fillEqually
         editorScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
-        noteListScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
+        noteListContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
         return result
     }
 
@@ -220,7 +276,6 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         templateSelector.isEnabled = bound
         editor.isEditable = bound
         if editor.string != viewModel.draftText { editor.string = viewModel.draftText }
-        editor.applyReadableAppearance()
         editor.setAccessibilityValue(viewModel.draftText)
         saveButton.title = viewModel.hasSelectedNote ? "Update note" : "Save note"
         saveButton.isEnabled = bound
@@ -230,7 +285,7 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         statusLabel.stringValue = statusText(for: viewModel.saveState)
         statusLabel.textColor = statusColor(for: viewModel.saveState)
         statusLabel.setAccessibilityValue(viewModel.saveState.accessibilityDescription)
-        rebuildNoteList()
+        rebuildNoteTable()
 
         templateSelector.nextKeyView = editor
         editor.nextKeyView = markerButton
@@ -239,40 +294,26 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         newNoteButton.nextKeyView = deleteButton
     }
 
-    private func rebuildNoteList() {
-        noteList.arrangedSubviews.forEach {
-            noteList.removeArrangedSubview($0)
-            $0.removeFromSuperview()
-        }
-        guard viewModel.isBound else {
-            noteList.addArrangedSubview(emptyState("Bind a meeting to start taking notes."))
-            return
-        }
-        guard !viewModel.notes.isEmpty else {
-            noteList.addArrangedSubview(emptyState("No saved notes yet. Capture the first thing worth remembering."))
-            return
-        }
-        for note in viewModel.notes.reversed() {
-            let row = noteRow(note)
-            noteList.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: noteList.widthAnchor).isActive = true
+    private func rebuildNoteTable() {
+        let notes = displayedNotes
+        noteListEmptyState.stringValue = !viewModel.isBound
+            ? "Bind a meeting to start taking notes."
+            : "No saved notes yet. Capture the first thing worth remembering."
+        noteListEmptyState.isHidden = !notes.isEmpty
+        noteTable.reloadData()
+        // Programmatic table columns start with a small intrinsic width. Make
+        // the single notes column consume the clip view immediately, including
+        // its first live population before the next resize pass.
+        noteTable.sizeLastColumnToFit()
+        if let id = viewModel.selectedNoteID,
+           let row = notes.firstIndex(where: { $0.id == id }) {
+            noteTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        } else {
+            noteTable.deselectAll(nil)
         }
     }
 
-    private func noteRow(_ note: RawMeetingNotes.Note) -> NSButton {
-        let title = timestampText(note.capturedAtMS)
-        let preview = notePreview(note.text)
-        let button = NoteRowButton(timestamp: title, preview: preview)
-        button.target = self
-        button.action = #selector(noteSelected(_:))
-        button.identifier = NSUserInterfaceItemIdentifier(note.id)
-        button.tag = 0
-        button.setAccessibilityLabel("Note at \(title)")
-        button.setAccessibilityValue(note.text)
-        button.setAccessibilityHelp("Edit this note in the note editor.")
-        button.state = note.id == viewModel.selectedNoteID ? .on : .off
-        return button
-    }
+    private var displayedNotes: [RawMeetingNotes.Note] { viewModel.notes.reversed() }
 
     private func notePreview(_ text: String) -> String {
         let lines = text
@@ -355,11 +396,35 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
     func textDidChange(_ notification: Notification) {
         guard !isApplyingModel else { return }
         viewModel.updateDraft(editor.string)
-        // AppKit may replace typing attributes when a different keyboard
-        // script starts a new run (notably Hebrew in Dark Mode). Recolor the
-        // actual storage after every edit so committed and pasted text cannot
-        // remain black-on-black even if the input manager reset its run.
-        editor.applyReadableAppearance()
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { displayedNotes.count }
+
+    func tableView(
+        _ tableView: NSTableView,
+        viewFor tableColumn: NSTableColumn?,
+        row: Int
+    ) -> NSView? {
+        guard displayedNotes.indices.contains(row) else { return nil }
+        let identifier = NSUserInterfaceItemIdentifier("saved-note-cell")
+        let cell = (tableView.makeView(withIdentifier: identifier, owner: self) as? MeetingNoteTableCellView)
+            ?? MeetingNoteTableCellView(frame: .zero)
+        cell.identifier = identifier
+        let note = displayedNotes[row]
+        cell.configure(
+            timestamp: timestampText(note.capturedAtMS),
+            preview: notePreview(note.text),
+            accessibilityText: note.text
+        )
+        return cell
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !isApplyingModel else { return }
+        let row = noteTable.selectedRow
+        guard displayedNotes.indices.contains(row) else { return }
+        viewModel.selectNote(id: displayedNotes[row].id)
+        window?.makeFirstResponder(editor)
     }
 
     @objc private func templateChanged() {
@@ -381,11 +446,6 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         window?.makeFirstResponder(editor)
     }
 
-    @objc private func noteSelected(_ sender: NSButton) {
-        guard let id = sender.identifier?.rawValue else { return }
-        viewModel.selectNote(id: id)
-        window?.makeFirstResponder(editor)
-    }
 }
 
 private extension Collection {
@@ -394,101 +454,53 @@ private extension Collection {
     }
 }
 
-/// AppKit scroll views use a bottom-left document origin by default. A flipped
-/// document view keeps the newest note stack anchored at the visible top,
-/// which is the reading order users expect from a list.
-private final class FlippedContentView: NSView {
-    override var isFlipped: Bool { true }
-}
+/// A real table cell, rather than a button placed in a stack document view.
+/// `NSTableView` owns the row and column geometry, so the preview always has
+/// the full readable width of the scroll view instead of shrinking to its
+/// intrinsic first glyph width.
+private final class MeetingNoteTableCellView: NSTableCellView {
+    private let timestampLabel = NSTextField(labelWithString: "")
+    private let previewLabel = NSTextField(wrappingLabelWithString: "")
 
-/// A native selectable row whose timestamp and note body are independent text
-/// fields. Keeping them separate prevents Unicode bidirectional reordering
-/// from folding Hebrew content into a leading Latin timestamp.
-private final class NoteRowButton: NSButton {
-    init(timestamp: String, preview: String) {
-        super.init(frame: .zero)
-        title = ""
-        setButtonType(.pushOnPushOff)
-        bezelStyle = .recessed
-
-        let timestampLabel = PassThroughTextField(labelWithString: timestamp)
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
         timestampLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         timestampLabel.textColor = .secondaryLabelColor
         timestampLabel.alignment = .left
         timestampLabel.baseWritingDirection = .leftToRight
-
-        let previewLabel = PassThroughTextField(wrappingLabelWithString: preview)
-        previewLabel.font = .systemFont(ofSize: 13, weight: .regular)
+        previewLabel.font = .systemFont(ofSize: 13)
         previewLabel.textColor = .labelColor
         previewLabel.alignment = .natural
         previewLabel.baseWritingDirection = .natural
         previewLabel.maximumNumberOfLines = 2
         previewLabel.lineBreakMode = .byTruncatingTail
+        previewLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        previewLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textField = previewLabel
 
         let content = NSStackView(views: [timestampLabel, previewLabel])
-        content.orientation = .vertical
-        content.alignment = .leading
-        content.spacing = 3
+        content.orientation = .horizontal
+        content.alignment = .top
+        content.spacing = 10
         content.translatesAutoresizingMaskIntoConstraints = false
         addSubview(content)
         NSLayoutConstraint.activate([
             content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             content.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 62),
-            previewLabel.widthAnchor.constraint(equalTo: content.widthAnchor),
+            content.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
+            timestampLabel.widthAnchor.constraint(equalToConstant: 38),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
-}
 
-private final class PassThroughTextField: NSTextField {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
-/// NSTextView's default typing attributes can resolve to black even when the
-/// app is in Dark Mode. Reapply semantic text colors to both existing content
-/// and future keystrokes whenever the effective appearance changes.
-private final class NotesTextView: NSTextView {
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        applyReadableAppearance()
-    }
-
-    func applyReadableAppearance() {
-        let resolvedFont = font ?? NSFont.systemFont(ofSize: 15)
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        // Dynamic text colors can be resolved outside the text view's drawing
-        // appearance when the app starts from launchd. Use explicit paired
-        // ink values here so typed text is never black-on-black or white-on-white.
-        let readableTextColor = isDark
-            ? NSColor(calibratedWhite: 0.96, alpha: 1)
-            : NSColor(calibratedWhite: 0.08, alpha: 1)
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .natural
-        paragraph.baseWritingDirection = .natural
-        paragraph.lineBreakMode = .byWordWrapping
-
-        textColor = readableTextColor
-        backgroundColor = .textBackgroundColor
-        defaultParagraphStyle = paragraph
-        typingAttributes = [
-            .font: resolvedFont,
-            .foregroundColor: readableTextColor,
-            .paragraphStyle: paragraph,
-        ]
-        if let textStorage, textStorage.length > 0 {
-            textStorage.addAttributes(
-                [
-                    .font: resolvedFont,
-                    .foregroundColor: readableTextColor,
-                    .paragraphStyle: paragraph,
-                ],
-                range: NSRange(location: 0, length: textStorage.length)
-            )
-        }
+    func configure(timestamp: String, preview: String, accessibilityText: String) {
+        timestampLabel.stringValue = timestamp
+        previewLabel.stringValue = preview
+        setAccessibilityLabel("Note at \(timestamp)")
+        setAccessibilityValue(accessibilityText)
+        setAccessibilityHelp("Select this note to edit it in the note editor.")
     }
 }
