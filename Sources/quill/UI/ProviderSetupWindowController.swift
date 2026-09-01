@@ -5,7 +5,9 @@ import AppKit
 /// downloads, or contacts LM Studio itself.
 @MainActor
 final class ProviderSetupWindowController: NSWindowController, NSTextFieldDelegate {
-    var onConfigurationChanged: ((LMStudioProviderConfiguration) -> Void)?
+    /// Fired only by the explicit Save action. Editing fields or checking
+    /// readiness is deliberately non-persistent.
+    var onSaveConfiguration: ((LMStudioProviderConfiguration) -> Void)?
     var onCheckReadiness: ((LMStudioProviderConfiguration) -> Void)?
 
     private var configuration: LMStudioProviderConfiguration
@@ -14,6 +16,7 @@ final class ProviderSetupWindowController: NSWindowController, NSTextFieldDelega
     private let model = NSPopUpButton(frame: .zero, pullsDown: false)
     private let status = NSTextField(wrappingLabelWithString: "Disabled. Recording and transcription do not depend on this provider.")
     private let check = NSButton(title: "Check availability", target: nil, action: nil)
+    private let save = NSButton(title: "Save provider settings", target: nil, action: nil)
 
     init(configuration: LMStudioProviderConfiguration = .init()) {
         self.configuration = configuration
@@ -79,6 +82,11 @@ final class ProviderSetupWindowController: NSWindowController, NSTextFieldDelega
         check.action = #selector(checkReadiness)
         check.bezelStyle = .rounded
         check.setAccessibilityLabel("Check local provider availability")
+        save.target = self
+        save.action = #selector(saveConfiguration)
+        save.bezelStyle = .rounded
+        save.keyEquivalent = "\r"
+        save.setAccessibilityLabel("Save local meeting brief provider settings")
 
         status.font = .systemFont(ofSize: 12)
         status.textColor = .secondaryLabelColor
@@ -92,7 +100,7 @@ final class ProviderSetupWindowController: NSWindowController, NSTextFieldDelega
             fieldRow(title: "Model", detail: "Recommended personal profile", field: model),
             status,
             divider(),
-            check,
+            NSStackView(views: [check, NSView(), save]),
             NSTextField(wrappingLabelWithString: "Quill never starts, installs, updates, or downloads LM Studio or models. If it is unavailable, recording and transcription continue normally."),
         ])
         stack.orientation = .vertical
@@ -150,26 +158,25 @@ final class ProviderSetupWindowController: NSWindowController, NSTextFieldDelega
         }
     }
 
-    private func publishConfiguration() {
+    private func captureConfiguration() {
         configuration.isEnabled = enabled.state == .on
         configuration.endpoint = endpoint.stringValue
         configuration.selectedModelID = model.titleOfSelectedItem ?? LMStudioProviderConfiguration.recommendedPersonalModelID
-        onConfigurationChanged?(configuration)
     }
 
     @objc private func changed() {
-        publishConfiguration()
+        captureConfiguration()
         refreshEnabledState()
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
         guard (obj.object as? NSTextField) === endpoint else { return }
-        publishConfiguration()
+        captureConfiguration()
         refreshEnabledState()
     }
 
     @objc private func checkReadiness() {
-        publishConfiguration()
+        captureConfiguration()
         guard configuration.isEnabled,
               (try? LoopbackProviderEndpoint(validating: configuration.endpoint)) != nil
         else {
@@ -178,6 +185,11 @@ final class ProviderSetupWindowController: NSWindowController, NSTextFieldDelega
         }
         status.stringValue = "Checking the local provider…"
         onCheckReadiness?(configuration)
+    }
+
+    @objc private func saveConfiguration() {
+        captureConfiguration()
+        onSaveConfiguration?(configuration)
     }
 
     private func heading(_ title: String, detail: String) -> NSView {

@@ -1,14 +1,12 @@
 # Local Meeting Notes and Briefs
 
-## Status: planned, not yet integrated
+## Status: integrated local-first thin slice
 
-This guide documents the proposed Local Meeting Notes and Meeting Briefs
-feature from the [product requirements](PRD_LOCAL_MEETING_NOTES.md). It is not
-a claim that the Notes window, brief viewer, `quill brief` command, or LM
-Studio setup controls are available in the current release. Use the existing
-recorder/transcriber instructions in the [README](../README.md) today. The
-integration owner must confirm availability before these future controls or
-artifacts are used operationally.
+This guide documents Quill's available Local Meeting Notes and Meeting Briefs
+flow. The native Notes, Meeting Brief, and Brief Provider Setup windows, plus
+the explicit `quill brief` command, are available in this build. Generation is
+still intentionally opt-in and depends on an already-running LM Studio server;
+Quill never installs, starts, downloads, or updates it.
 
 ## What stays the same
 
@@ -41,10 +39,10 @@ The session folder is the local lifecycle boundary:
   mixed.m4a                         optional listening copy
   transcript.json                   canonical timed transcript
   transcript.md                     transcript reading view
-  raw-notes.json                    user-owned notes (upcoming)
+  raw-notes.json                    user-owned notes
   artifacts/
-    meeting-brief.json              generated canonical brief (upcoming)
-    meeting-brief.md                generated reading view (upcoming)
+    meeting-brief.json              generated canonical brief
+    meeting-brief.md                generated reading view
 ```
 
 `transcript.json` is the canonical transcript. `transcript.md` is its readable
@@ -56,8 +54,8 @@ The Markdown artifact is a readable rendering of the generated brief.
 ## Proposed workflow
 
 1. Record and transcribe locally as usual.
-2. During the meeting, write concise raw notes when the upcoming Notes feature
-   is available. These notes are user cues, not AI output.
+2. During the meeting, open **Meeting notes…** and write concise raw notes.
+   Their timestamps are meeting-relative user cues, not AI output.
 3. After the canonical transcript is complete, choose **Generate meeting
    brief** explicitly. There is no recording-time, automatic, or silent
    generation.
@@ -75,7 +73,7 @@ If raw notes change, the prior brief remains tied to its older frozen revision;
 choose regeneration explicitly to create a new draft. Regeneration never
 rewrites raw notes or the canonical transcript.
 
-## Future LM Studio option
+## LM Studio option
 
 The first proposed local summarization provider is LM Studio, but it is opt-in
 and disabled by default. Quill will accept only literal loopback endpoints:
@@ -86,7 +84,8 @@ Install, update, and select LM Studio and its model yourself. Quill will never
 launch, install, update, remove, or download either LM Studio or its models.
 There is no cloud provider or fallback. If the provider is unavailable, keep
 recording and transcription normally; use setup or retry only when you choose
-to generate a brief.
+to generate a brief. Provider edits are saved only through the explicit Save
+action, and the CLI requires `--enable` for every direct generation invocation.
 
 The initial personal recommendation is `google/gemma-4-26b-a4b-qat`. It is
 configurable and is not a public default. For this provider, Quill can record

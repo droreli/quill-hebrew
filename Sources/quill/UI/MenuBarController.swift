@@ -13,6 +13,9 @@ final class MenuBarController {
     var onToggle: (() -> Void)?
     var onOpenControls: (() -> Void)?
     var onOpenFolder: (() -> Void)?
+    var onOpenNotes: (() -> Void)?
+    var onOpenBrief: (() -> Void)?
+    var onOpenProviderSetup: (() -> Void)?
     var onQuit: (() -> Void)?
 
     init() {
@@ -51,6 +54,7 @@ final class MenuBarController {
             action: #selector(toggleClicked),
             keyEquivalent: "r"
         )
+        toggleItem.keyEquivalentModifierMask = [.command, .control]
         toggleItem.image = Self.symbol("record.circle")
         menu.addItem(toggleItem)
 
@@ -62,6 +66,30 @@ final class MenuBarController {
         openFolder.image = Self.symbol("folder")
         menu.addItem(openFolder)
 
+        let openNotes = NSMenuItem(
+            title: "Meeting notes…",
+            action: #selector(openNotesClicked),
+            keyEquivalent: "n"
+        )
+        openNotes.image = Self.symbol("note.text")
+        menu.addItem(openNotes)
+
+        let openBrief = NSMenuItem(
+            title: "Meeting brief…",
+            action: #selector(openBriefClicked),
+            keyEquivalent: "b"
+        )
+        openBrief.image = Self.symbol("sparkles")
+        menu.addItem(openBrief)
+
+        let providerSetup = NSMenuItem(
+            title: "Brief provider setup…",
+            action: #selector(openProviderSetupClicked),
+            keyEquivalent: ""
+        )
+        providerSetup.image = Self.symbol("cpu")
+        menu.addItem(providerSetup)
+
         menu.addItem(.separator())
 
         let quit = NSMenuItem(
@@ -72,7 +100,7 @@ final class MenuBarController {
         quit.image = Self.symbol("power")
         menu.addItem(quit)
 
-        for item in [openControls, toggleItem, openFolder, quit] {
+        for item in [openControls, toggleItem, openFolder, openNotes, openBrief, providerSetup, quit] {
             item.target = self
         }
 
@@ -185,5 +213,8 @@ final class MenuBarController {
     @objc private func toggleClicked() { onToggle?() }
     @objc private func openControlsClicked() { onOpenControls?() }
     @objc private func openFolderClicked() { onOpenFolder?() }
+    @objc private func openNotesClicked() { onOpenNotes?() }
+    @objc private func openBriefClicked() { onOpenBrief?() }
+    @objc private func openProviderSetupClicked() { onOpenProviderSetup?() }
     @objc private func quitClicked() { onQuit?() }
 }

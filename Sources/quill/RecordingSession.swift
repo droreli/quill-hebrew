@@ -7,6 +7,9 @@ import Foundation
 final class RecordingSession {
     let dir: URL
     let startedAt = Date()
+    /// Created before capture so live notes and the completed metadata share
+    /// one durable identity without putting a premature meta.json on disk.
+    let sessionID = UUID().uuidString.lowercased()
 
     private let mic = MicRecorder()
     private let system = SystemAudioRecorder()
@@ -61,6 +64,8 @@ final class RecordingSession {
         let earliest = min(micStart, systemStart)
 
         let meta: [String: Any] = [
+            "schema_version": "quill.session.v1",
+            "session_id": sessionID,
             "started": iso.string(from: startedAt),
             "ended": iso.string(from: ended),
             "duration_seconds": Int(ended.timeIntervalSince(startedAt)),
@@ -79,7 +84,7 @@ final class RecordingSession {
             withJSONObject: meta,
             options: [.prettyPrinted, .sortedKeys]
         ) {
-            try? data.write(to: dir.appendingPathComponent("meta.json"))
+            try? data.write(to: dir.appendingPathComponent("meta.json"), options: .atomic)
         }
     }
 }

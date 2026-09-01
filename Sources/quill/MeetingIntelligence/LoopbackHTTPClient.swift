@@ -14,6 +14,7 @@ enum LMStudioError: Error, Equatable, LocalizedError {
     case responseTooLarge(limit: Int)
     case tokenBudgetExceeded(segmentID: String)
     case inconsistentInput(String)
+    case incompleteTranscript
 
     var errorDescription: String? {
         switch self {
@@ -27,6 +28,7 @@ enum LMStudioError: Error, Equatable, LocalizedError {
         case let .responseTooLarge(limit): "LM Studio response exceeded the \(limit)-byte limit."
         case let .tokenBudgetExceeded(segmentID): "Transcript segment \(segmentID) exceeds the local model token budget."
         case let .inconsistentInput(reason): "Meeting brief inputs are inconsistent: \(reason)"
+        case .incompleteTranscript: "The transcript has no canonical segments; Quill must report incomplete coverage without model inference."
         }
     }
 }
@@ -70,23 +72,11 @@ struct LMStudioConfiguration: Sendable, Equatable {
     /// credentials, and host aliases such as `localhost` are intentionally
     /// refused before a request can be created.
     static func validateLoopbackEndpoint(_ value: String) throws -> URL {
-        guard let components = URLComponents(string: value),
-              components.scheme?.lowercased() == "http",
-              let parsedHost = components.host?.lowercased(),
-              ["127.0.0.1", "[::1]"].contains(parsedHost),
-              components.user == nil,
-              components.password == nil,
-              components.query == nil,
-              components.fragment == nil,
-              components.path.isEmpty || components.path == "/",
-              let url = components.url
-        else {
+        do {
+            return try LoopbackProviderEndpoint(validating: value).url
+        } catch {
             throw LMStudioError.invalidEndpoint("must be literal http://127.0.0.1 or http://[::1] with no path or credentials")
         }
-        if let port = components.port, !(1...65_535).contains(port) {
-            throw LMStudioError.invalidEndpoint("port is outside 1...65535")
-        }
-        return url
     }
 }
 
@@ -122,11 +112,8 @@ final class LoopbackHTTPClient: NSObject, @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         do {
-            let (data, response) = try await session.data(for: request)
+            let (bytes, response) = try await session.bytes(for: request)
             try Task.checkCancellation()
-            guard data.count <= maximumResponseBytes else {
-                throw LMStudioError.responseTooLarge(limit: maximumResponseBytes)
-            }
             guard let http = response as? HTTPURLResponse else {
                 throw LMStudioError.malformedResponse
             }
@@ -135,6 +122,18 @@ final class LoopbackHTTPClient: NSObject, @unchecked Sendable {
                     throw LMStudioError.providerUnavailable
                 }
                 throw LMStudioError.invalidResponse(statusCode: http.statusCode)
+            }
+            if let contentLength = http.value(forHTTPHeaderField: "Content-Length"),
+               let declaredLength = Int(contentLength), declaredLength > maximumResponseBytes {
+                throw LMStudioError.responseTooLarge(limit: maximumResponseBytes)
+            }
+            var data = Data()
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                guard data.count < maximumResponseBytes else {
+                    throw LMStudioError.responseTooLarge(limit: maximumResponseBytes)
+                }
+                data.append(byte)
             }
             return data
         } catch is CancellationError {

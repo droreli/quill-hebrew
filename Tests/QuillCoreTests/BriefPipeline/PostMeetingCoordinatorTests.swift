@@ -49,6 +49,69 @@ import Testing
     #expect(try String(contentsOf: session.appendingPathComponent("brief.log"), encoding: .utf8).contains("stale inputs"))
 }
 
+@Test func rawNoteContentChangeWithSameRevisionProducesStaleBrief() async throws {
+    let session = try makeSession(name: "content-stale")
+    let engine = ControlledEngine()
+    let recorder = StateRecorder()
+    let coordinator = PostMeetingCoordinator(engine: engine)
+    await coordinator.setStatusHandler { state in Task { await recorder.append(state) } }
+    try await coordinator.enqueue(session)
+    try await waitUntil { await engine.hasStarted }
+
+    try writeNotes(in: session, revision: 0, noteText: "Changed without a revision bump")
+    await engine.resume()
+    try await waitUntil { await recorder.hasReady(stale: true) }
+}
+
+@Test func rawNotesForAnotherSessionAreRejectedBeforeGeneration() async throws {
+    let session = try makeSession(name: "wrong-notes-session")
+    try writeNotes(in: session, revision: 0, sessionID: "another-session")
+    let coordinator = PostMeetingCoordinator(engine: ScriptedEngine(outcomes: [.success]))
+
+    await #expect(throws: PostMeetingCoordinator.CoordinatorError.self) {
+        try await coordinator.enqueue(session)
+    }
+}
+
+@Test func emptyTranscriptPublishesQuillCoverageWarningWithoutStartingEngine() async throws {
+    let session = try makeSession(name: "empty-transcript")
+    let empty = try SessionTranscript(
+        engine: "fixture", model: "fixture", createdAt: "2026-09-01T00:00:00Z",
+        speakerLabels: true, timestamps: true, segments: []
+    )
+    try JSONEncoder().encode(empty).write(to: session.appendingPathComponent("transcript.json"))
+    let engine = ControlledEngine()
+    let coordinator = PostMeetingCoordinator(engine: engine)
+    try await coordinator.enqueue(session)
+    let briefURL = session.appendingPathComponent("artifacts/meeting-brief.json")
+    try await waitUntil {
+        let exists = FileManager.default.fileExists(atPath: briefURL.path)
+        let state = await coordinator.currentState()
+        return exists && state == .idle
+    }
+
+    #expect(!(await engine.hasStarted))
+    let brief = try JSONDecoder().decode(MeetingBrief.self, from: Data(contentsOf: briefURL))
+    #expect(brief.overviewSupport == .quillSystemNotice)
+    #expect(brief.warnings.contains { $0.contains("zero segments") })
+}
+
+@Test func cancellingQueuedJobLeavesActiveJobStateUntouched() async throws {
+    let first = try makeSession(name: "active")
+    let second = try makeSession(name: "queued")
+    let engine = ControlledEngine()
+    let coordinator = PostMeetingCoordinator(engine: engine)
+    try await coordinator.enqueue(first)
+    try await waitUntil { await engine.hasStarted }
+    try await coordinator.enqueue(second)
+    let activeState = await coordinator.currentState()
+
+    #expect(await coordinator.cancel(second))
+    #expect(await coordinator.currentState() == activeState)
+    await engine.resume()
+    try await waitUntil { await coordinator.currentState() == .idle }
+}
+
 @Test func failedJobDoesNotBlockLaterJobs() async throws {
     let first = try makeSession(name: "first")
     let second = try makeSession(name: "second")
@@ -129,13 +192,16 @@ private func makeSession(name: String) throws -> URL {
     return session
 }
 
-private func writeNotes(in session: URL, revision: Int) throws {
+private func writeNotes(in session: URL, revision: Int, noteText: String? = nil, sessionID: String? = nil) throws {
+    let noteItems = noteText.map {
+        [RawMeetingNotes.Note(id: "note-1", text: $0, capturedAtMS: 0, createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z")]
+    } ?? []
     let notes = try RawMeetingNotes(
-        sessionID: "fixture-session",
+        sessionID: try (sessionID ?? SessionIdentity(sessionDirectory: session).value),
         revision: revision,
         template: "general",
         updatedAt: "2026-09-01T00:00:00Z",
-        notes: []
+        notes: noteItems
     )
     try JSONEncoder().encode(notes).write(to: session.appendingPathComponent("raw-notes.json"), options: .atomic)
 }

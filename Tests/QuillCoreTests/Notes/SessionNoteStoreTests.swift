@@ -70,6 +70,64 @@ import Testing
     #expect(snapshot.notes.allSatisfy { $0.capturedAtMS >= 0 })
 }
 
+@Test func failedWritesDoNotAdvanceTheInMemoryDocument() async throws {
+    let fixture = try makeSessionFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+    let store = try SessionNoteStore(
+        sessionDirectory: fixture.directory,
+        writeAtomically: { _, _ in throw ForcedWriteFailure() }
+    )
+
+    await #expect(throws: ForcedWriteFailure.self) {
+        try await store.add(text: "must not appear", capturedAtMS: 0)
+    }
+
+    let snapshot = await store.snapshot()
+    #expect(snapshot.revision == 0)
+    #expect(snapshot.notes.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("raw-notes.json").path))
+}
+
+@Test func independentStoresDoNotLoseConcurrentEdits() async throws {
+    let fixture = try makeSessionFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+    let first = try SessionNoteStore(sessionDirectory: fixture.directory)
+    let second = try SessionNoteStore(sessionDirectory: fixture.directory)
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        for index in 0 ..< 40 {
+            group.addTask {
+                let store = index.isMultiple(of: 2) ? first : second
+                _ = try await store.add(text: "note \(index)", capturedAtMS: index)
+            }
+        }
+        try await group.waitForAll()
+    }
+
+    let reopened = try SessionNoteStore(sessionDirectory: fixture.directory)
+    let snapshot = await reopened.snapshot()
+    #expect(snapshot.revision == 40)
+    #expect(snapshot.notes.count == 40)
+    #expect(Set(snapshot.notes.map(\.id)).count == 40)
+}
+
+@Test func templateSelectionPersistsAndReopens() async throws {
+    let fixture = try makeSessionFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+    let store = try SessionNoteStore(sessionDirectory: fixture.directory)
+    try await store.setTemplate("customer-discovery")
+    let selected = await store.snapshot()
+    #expect(selected.template == "customer-discovery")
+    #expect(selected.revision == 1)
+
+    let reopened = try SessionNoteStore(sessionDirectory: fixture.directory)
+    let snapshot = await reopened.snapshot()
+    #expect(snapshot.template == "customer-discovery")
+    #expect(snapshot.revision == 1)
+}
+
 @Test func storeRejectsNegativeMeetingRelativeTimestamps() async throws {
     let fixture = try makeSessionFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -109,3 +167,5 @@ private func sourceArtifactHashes(in directory: URL) throws -> [String: String] 
 private func sha256(of url: URL) throws -> String {
     SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
 }
+
+private struct ForcedWriteFailure: Error {}

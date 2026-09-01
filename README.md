@@ -103,8 +103,10 @@ on next launch (the filesystem is the queue: a session with `meta.json` but no
 `transcript.json` is pending). Failures append to the session's
 `transcribe.log` and never block later jobs.
 
-The engine sits behind a small protocol; a Whisper engine (WhisperKit
-large-v3-turbo) is planned as the fallback / re-transcription option.
+For Hebrew or automatic-language sessions, an unavailable Hebrew MLX runtime
+is reported as a transcription failure rather than silently producing an
+English Parakeet transcript. Select the explicit local Hebrew CPU engine when
+that fallback is appropriate. English-only sessions may use Parakeet.
 
 ## Privacy and consent
 
@@ -114,14 +116,14 @@ workplace, and privacy rules that apply to you. See
 [PRIVACY_AND_CONSENT.md](PRIVACY_AND_CONSENT.md) before publishing or using a
 modified build.
 
-## Upcoming local meeting notes and briefs
+## Local meeting notes and briefs
 
-The next local-first phase proposes separate, timestamped raw notes and an
-explicit post-transcript meeting-brief draft. It is **planned, not yet an
-integrated released UI**: do not expect Notes, brief generation, or LM Studio
-controls in the current app until the integration owner confirms them. The
-planned brief uses only the canonical transcript and a frozen raw-note revision
-(not `mic.caf`, `system.caf`, or optional `mixed.m4a`), keeps raw notes separate
+Quill includes separate, timestamped raw notes and an explicit post-transcript
+meeting-brief draft. Open **Meeting notes…** while recording to capture local
+notes with meeting-relative timestamps. After a `transcript.json` exists, open
+**Meeting brief…** and choose Generate; it is never automatic and never reads
+`mic.caf`, `system.caf`, or optional `mixed.m4a`. The brief uses only the
+canonical transcript and a frozen raw-note revision, keeps raw notes separate
 from generated content, and has no cloud fallback, accounts, telemetry, or
 automatic sharing.
 
@@ -156,6 +158,11 @@ Optional, at `~/.config/quill/config.json`:
   },
   "speaker_labels": false,
   "export_mixed_audio": false,
+  "meeting_brief_provider": {
+    "enabled": false,
+    "endpoint": "http://127.0.0.1:1234",
+    "model": "google/gemma-4-26b-a4b-qat"
+  },
   "on_stop": "my-hook"
 }
 ```
@@ -188,6 +195,8 @@ for future recordings after you turn them on.
   argument, **after the transcript is written** (or right after recording if
   transcription is disabled). Wire it to whatever comes next: summarization,
   filing, indexing.
+- `meeting_brief_provider` — optional LM Studio settings. It is disabled by
+  default and persists only when you explicitly save **Brief provider setup…**.
 
 ## CLI
 
@@ -200,6 +209,8 @@ quill doctor                 # check permissions, recordings folder, models
 quill verify-mix             # synthetic, no-permission mixed-audio verification
 quill verify-mlx <audio>     # check Quill's local MLX bridge and timed output
 quill retranscribe <session> # re-run a finished session without recording again
+quill brief <session> --enable # explicitly generate with an already-running local LM Studio
+quill brief <session> --enable --endpoint http://127.0.0.1:1234 --model google/gemma-4-26b-a4b-qat
 quill install --launch-at-login
 quill install --uninstall
 ```
@@ -228,8 +239,8 @@ Product planning for the next local-first phase:
   per-process picker if it bothers you).
 - If recordings come out silent, check System Settings → Privacy & Security →
   Screen & System Audio Recording.
-- The Hebrew MLX engine is local and preferred here. If it cannot start,
-  Quill warns and uses the local Parakeet fallback; select the CPU fallback in
-  controls if the GPU runtime is unavailable.
+- The Hebrew MLX engine is local and preferred here. If it cannot start for a
+  Hebrew or automatic-language session, Quill fails visibly rather than using
+  English Parakeet; select the CPU fallback in controls if appropriate.
 - The binary embeds its Info.plist (`__TEXT,__info_plist`) so TCC can
   attribute permissions to quill itself when running as a LaunchAgent.

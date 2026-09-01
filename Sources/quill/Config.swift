@@ -128,6 +128,46 @@ enum Config {
         )
     }
 
+    /// Optional local-only meeting-brief provider.  This intentionally lives
+    /// beside, rather than inside, transcription settings: recording and
+    /// transcription must stay fully usable when it is disabled.
+    static func lmStudioProvider() -> LMStudioProviderConfiguration {
+        let provider = load()?["meeting_brief_provider"] as? [String: Any] ?? [:]
+        return LMStudioProviderConfiguration(
+            isEnabled: provider["enabled"] as? Bool ?? false,
+            endpoint: provider["endpoint"] as? String
+                ?? LMStudioProviderConfiguration.defaultEndpoint,
+            selectedModelID: provider["model"] as? String
+                ?? LMStudioProviderConfiguration.recommendedPersonalModelID
+        )
+    }
+
+    /// Provider preferences are persisted only from the explicit Save action
+    /// in Provider Setup.  Merger semantics preserve all unrelated local
+    /// recording settings and user-managed configuration keys.
+    static func saveLMStudioProvider(_ provider: LMStudioProviderConfiguration) throws {
+        var config = load() ?? [:]
+        config["meeting_brief_provider"] = [
+            "enabled": provider.isEnabled,
+            "endpoint": provider.endpoint,
+            "model": provider.selectedModelID,
+        ]
+        try write(config)
+    }
+
+    static func lmStudioConfiguration(
+        provider: LMStudioProviderConfiguration = lmStudioProvider(),
+        enabledOverride: Bool? = nil,
+        endpointOverride: String? = nil,
+        modelOverride: String? = nil
+    ) throws -> LMStudioConfiguration {
+        try LMStudioConfiguration(
+            endpoint: endpointOverride ?? provider.endpoint,
+            modelID: modelOverride ?? provider.selectedModelID,
+            isEnabled: enabledOverride ?? provider.isEnabled
+        )
+    }
+
     /// Persist the choices made in the controls window. This deliberately
     /// merges only the recording preferences, preserving local engine paths,
     /// hooks, and any other user-managed configuration keys.
@@ -142,15 +182,7 @@ enum Config {
         config["speaker_labels"] = options.showSpeakerLabels
         config["export_mixed_audio"] = options.output == .separateWithMixedExport
 
-        try FileManager.default.createDirectory(
-            at: path.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        let data = try JSONSerialization.data(
-            withJSONObject: config,
-            options: [.prettyPrinted, .sortedKeys]
-        )
-        try data.write(to: path, options: .atomic)
+        try write(config)
     }
 
     /// The proven Tamlil runtime lives here by default. Both the interpreter
@@ -218,6 +250,18 @@ enum Config {
             return nil
         }
         return json
+    }
+
+    private static func write(_ config: [String: Any]) throws {
+        try FileManager.default.createDirectory(
+            at: path.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(
+            withJSONObject: config,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        try data.write(to: path, options: .atomic)
     }
 
     /// Resolve the recordings root from an optional CLI override.

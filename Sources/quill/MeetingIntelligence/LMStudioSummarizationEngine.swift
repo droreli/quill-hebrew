@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Opt-in, local-only OpenAI-compatible LM Studio implementation. It does not
@@ -28,11 +29,16 @@ struct LMStudioSummarizationEngine: SummarizationEngine, Sendable {
         guard configuration.isEnabled else { throw LMStudioError.disabled }
         try transcript.validate()
         try rawNotes.validate()
+        guard !transcript.segments.isEmpty else { throw LMStudioError.incompleteTranscript }
         guard input.transcriptSegmentCount == transcript.segments.count else {
             throw LMStudioError.inconsistentInput("transcript segment count does not match canonical transcript")
         }
         guard input.rawNotesRevision == rawNotes.revision else {
             throw LMStudioError.inconsistentInput("raw-note revision is not the frozen canonical revision")
+        }
+        if let rawNotesSHA256 = input.rawNotesSHA256,
+           try rawNotesDigest(rawNotes) != rawNotesSHA256 {
+            throw LMStudioError.inconsistentInput("raw-note digest is not the frozen canonical content")
         }
         try Task.checkCancellation()
         let chunks = try promptBuilder.chunks(for: transcript, tokenBudget: configuration.chunkTokenBudget)
@@ -56,5 +62,12 @@ struct LMStudioSummarizationEngine: SummarizationEngine, Sendable {
             input: input,
             configuration: configuration
         )
+    }
+
+    private func rawNotesDigest(_ rawNotes: RawMeetingNotes) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let digest = SHA256.hash(data: try encoder.encode(rawNotes))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }

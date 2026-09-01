@@ -17,12 +17,14 @@ actor PostMeetingCoordinator {
     enum CoordinatorError: Error, LocalizedError {
         case duplicateJob(URL)
         case missingRawNotes(URL)
+        case rawNotesSessionMismatch(expected: String, found: String)
         case staleTranscript(URL)
 
         var errorDescription: String? {
             switch self {
             case let .duplicateJob(url): "A brief job is already active for \(url.lastPathComponent)"
             case let .missingRawNotes(url): "No raw-notes.json at \(url.path)"
+            case let .rawNotesSessionMismatch(expected, found): "raw-notes.json belongs to \(found), not session \(expected)"
             case let .staleTranscript(url): "Transcript changed while preparing \(url.path)"
             }
         }
@@ -88,7 +90,12 @@ actor PostMeetingCoordinator {
         queue.remove(at: index)
         let store = MeetingBriefStore(sessionDirectory: sessionDirectory)
         try? store.clearPending()
-        publish(.cancelled(session: sessionDirectory.lastPathComponent))
+        // A queued cancellation must not replace the visible state of an
+        // unrelated active generation.
+        if currentJob == nil {
+            publish(.cancelled(session: sessionDirectory.lastPathComponent))
+        }
+        log(sessionDirectory, "queued generation cancelled")
         return true
     }
 
@@ -121,10 +128,15 @@ actor PostMeetingCoordinator {
         let transcriptData = try Data(contentsOf: transcriptURL)
         let transcript = try JSONDecoder().decode(SessionTranscript.self, from: transcriptData)
         let rawNotes = try readRawNotes(from: directory)
+        let expectedSessionID = try SessionIdentity(sessionDirectory: directory).value
+        guard rawNotes.sessionID == expectedSessionID else {
+            throw CoordinatorError.rawNotesSessionMismatch(expected: expectedSessionID, found: rawNotes.sessionID)
+        }
         let input = SummaryInput(
             transcriptSHA256: Self.sha256(transcriptData),
             transcriptSegmentCount: transcript.segments.count,
-            rawNotesRevision: rawNotes.revision
+            rawNotesRevision: rawNotes.revision,
+            rawNotesSHA256: try rawNotesDigest(rawNotes)
         )
         return Job(id: UUID(), sessionDirectory: directory, transcript: transcript, rawNotes: rawNotes, input: input)
     }
@@ -144,19 +156,28 @@ actor PostMeetingCoordinator {
                 try Task.checkCancellation()
                 // The snapshot has already decoded/validated the transcript
                 // and notes. Generation receives only those frozen values.
-                publish(.generating(session: name, queued: queue.count))
-                log(job.sessionDirectory, "generation started (notes revision \(job.rawNotes.revision))")
-                let engine = engine
-                let task = Task {
-                    try await engine.summarize(
-                        transcript: job.transcript,
-                        rawNotes: job.rawNotes,
-                        input: job.input
-                    )
+                let brief: MeetingBrief
+                if job.transcript.segments.isEmpty {
+                    // This coverage result is owned by Quill, never by the
+                    // model. It keeps the user informed without a zero-chunk
+                    // extraction/reduction request.
+                    log(job.sessionDirectory, "generation skipped: transcript has zero segments")
+                    brief = try MeetingBrief.incompleteTranscript(input: job.input)
+                } else {
+                    publish(.generating(session: name, queued: queue.count))
+                    log(job.sessionDirectory, "generation started (notes revision \(job.rawNotes.revision))")
+                    let engine = engine
+                    let task = Task {
+                        try await engine.summarize(
+                            transcript: job.transcript,
+                            rawNotes: job.rawNotes,
+                            input: job.input
+                        )
+                    }
+                    generationTask = task
+                    brief = try await task.value
+                    generationTask = nil
                 }
-                generationTask = task
-                let brief = try await task.value
-                generationTask = nil
                 guard !cancelledJobIDs.contains(job.id) else { throw CancellationError() }
                 try MeetingBriefStore(sessionDirectory: job.sessionDirectory).write(
                     brief,
@@ -196,6 +217,11 @@ actor PostMeetingCoordinator {
             return true
         }
         let currentNotes = try readRawNotes(from: job.sessionDirectory)
+        let expectedSessionID = try SessionIdentity(sessionDirectory: job.sessionDirectory).value
+        guard currentNotes.sessionID == expectedSessionID else { return true }
+        if let rawNotesSHA256 = job.input.rawNotesSHA256 {
+            return try rawNotesDigest(currentNotes) != rawNotesSHA256
+        }
         return currentNotes.revision != job.rawNotes.revision
     }
 
@@ -214,6 +240,12 @@ actor PostMeetingCoordinator {
             )
         }
         return try JSONDecoder().decode(RawMeetingNotes.self, from: Data(contentsOf: url))
+    }
+
+    private func rawNotesDigest(_ rawNotes: RawMeetingNotes) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return Self.sha256(try encoder.encode(rawNotes))
     }
 
     private func publish(_ state: State) {

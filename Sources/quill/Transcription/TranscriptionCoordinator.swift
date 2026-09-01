@@ -136,7 +136,7 @@ actor TranscriptionCoordinator {
             }
         }
 
-        var merged: [Transcript.Segment] = []
+        var merged: [(segment: Transcript.Segment, insertionIndex: Int)] = []
         for track in meta.tracks {
             let audio = dir.appendingPathComponent(track.file)
             guard FileManager.default.fileExists(atPath: audio.path) else {
@@ -154,16 +154,46 @@ actor TranscriptionCoordinator {
                 continue
             }
             let offset = TimeInterval(track.offsetMs) / 1000
-            merged += segments.map {
-                Transcript.Segment(
-                    speaker: track.speaker,
-                    start_ms: Int(($0.start + offset) * 1000),
-                    end_ms: Int(($0.end + offset) * 1000),
-                    text: $0.text
+            let insertionStart = merged.count
+            for (index, segment) in segments.enumerated() {
+                let speaker = track.speaker
+                let startMilliseconds = Int((segment.start + offset) * 1_000)
+                let endMilliseconds = Int((segment.end + offset) * 1_000)
+                let text = segment.text
+                let transcriptSegment = Transcript.Segment(
+                    id: "",
+                    speaker: speaker,
+                    start_ms: startMilliseconds,
+                    end_ms: endMilliseconds,
+                    text: text
                 )
+                merged.append((segment: transcriptSegment, insertionIndex: insertionStart + index))
             }
         }
-        merged.sort { $0.start_ms < $1.start_ms }
+        // Keep chronology deterministic even when the two clean tracks have
+        // equal timestamps.  The final insertion index makes the tie order
+        // stable across Swift sort implementations and provides stable IDs.
+        merged.sort {
+            if $0.segment.start_ms != $1.segment.start_ms {
+                return $0.segment.start_ms < $1.segment.start_ms
+            }
+            if $0.segment.end_ms != $1.segment.end_ms {
+                return $0.segment.end_ms < $1.segment.end_ms
+            }
+            if $0.segment.speaker != $1.segment.speaker {
+                return $0.segment.speaker < $1.segment.speaker
+            }
+            return $0.insertionIndex < $1.insertionIndex
+        }
+        let ordered = merged.enumerated().map { index, entry in
+            Transcript.Segment(
+                id: SessionTranscript.stableSegmentID(for: index),
+                speaker: entry.segment.speaker,
+                start_ms: entry.segment.start_ms,
+                end_ms: entry.segment.end_ms,
+                text: entry.segment.text
+            )
+        }
 
         let transcript = Transcript(
             engine: engine.name,
@@ -171,10 +201,10 @@ actor TranscriptionCoordinator {
             created_at: ISO8601DateFormatter().string(from: Date()),
             speaker_labels: meta.showSpeakerLabels,
             timestamps: meta.showTimestamps,
-            segments: merged
+            segments: ordered
         )
         try transcript.write(to: dir)
-        log(dir, "done — \(merged.count) segments")
+        log(dir, "done — \(ordered.count) segments")
     }
 
     private func preparedEngine(for meta: SessionMeta) async throws -> TranscriptionEngine {
@@ -206,6 +236,14 @@ actor TranscriptionCoordinator {
             self.engineChoice = .hebrewMLX
             return engine
         } catch {
+            // Hebrew or automatic sessions must never become an English-only
+            // Parakeet transcript merely because MLX could not start.  Keep
+            // the failure explicit so a future brief cannot silently rely on
+            // the wrong-language source.  The explicitly selected Hebrew CPU
+            // engine remains available through its own branch above.
+            guard meta.language == .english else {
+                throw error
+            }
             FileHandle.standardError.write(Data(
                 "warning: Hebrew MLX unavailable (\(error)) — falling back to local English Parakeet\n".utf8
             ))
@@ -323,12 +361,14 @@ struct SessionMeta {
 /// exists to be serialized.
 private struct Transcript: Codable {
     struct Segment: Codable {
+        let id: String
         let speaker: String
         let start_ms: Int
         let end_ms: Int
         let text: String
     }
 
+    var schema_version = MeetingIntelligenceSchema.transcriptV1
     let engine: String
     let model: String
     let created_at: String

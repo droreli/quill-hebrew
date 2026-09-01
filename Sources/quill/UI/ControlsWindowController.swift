@@ -8,6 +8,9 @@ final class ControlsWindowController: NSWindowController {
     var onToggleRecording: (() -> Void)?
     var onOpenRecordings: (() -> Void)?
     var onOpenSession: (() -> Void)?
+    var onOpenNotes: (() -> Void)?
+    var onOpenBrief: (() -> Void)?
+    var onOpenProviderSetup: (() -> Void)?
 
     private var options: RecordingOptions
     private let language = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -25,7 +28,7 @@ final class ControlsWindowController: NSWindowController {
     init(root: URL, options: RecordingOptions) {
         self.options = options
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 780),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -34,8 +37,13 @@ final class ControlsWindowController: NSWindowController {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
-        window.minSize = NSSize(width: 560, height: 640)
+        window.minSize = NSSize(width: 560, height: 700)
         window.isReleasedWhenClosed = false
+        let frameAutosaveName = "QuillControlsWindow"
+        if !window.setFrameUsingName(frameAutosaveName) {
+            window.center()
+        }
+        window.setFrameAutosaveName(frameAutosaveName)
         super.init(window: window)
         build(root: root)
         apply(options)
@@ -88,7 +96,7 @@ final class ControlsWindowController: NSWindowController {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -24),
         ])
 
-        [header(), recordingSetupCard(), readingAndOutputCard(), storageCard(), actionFooter()].forEach {
+        [header(), recordingSetupCard(), readingAndOutputCard(), storageCard(), meetingIntelligenceCard(), actionFooter()].forEach {
             stack.addArrangedSubview($0)
             $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -188,8 +196,29 @@ final class ControlsWindowController: NSWindowController {
         return card("internaldrive", "Files", "Your recordings stay in a local folder you control.", rows, "Recording files")
     }
 
+    private func meetingIntelligenceCard() -> NSView {
+        let notes = NSButton(title: "Meeting notes…", target: self, action: #selector(openNotes))
+        notes.image = symbol("note.text", size: 12, weight: .medium)
+        let brief = NSButton(title: "Meeting brief…", target: self, action: #selector(openBrief))
+        brief.image = symbol("sparkles", size: 12, weight: .medium)
+        let provider = NSButton(title: "Provider setup…", target: self, action: #selector(openProviderSetup))
+        provider.image = symbol("cpu", size: 12, weight: .medium)
+        for button in [notes, brief, provider] {
+            button.bezelStyle = .rounded
+            button.imagePosition = .imageLeading
+        }
+        let actions = horizontal([notes, brief, provider], spacing: 8, alignment: .centerY)
+        return card(
+            "sparkles",
+            "Meeting intelligence",
+            "Notes stay local during a meeting. Brief generation is always an explicit post-transcript action.",
+            actions,
+            "Meeting intelligence"
+        )
+    }
+
     private func actionFooter() -> NSView {
-        let helper = label("⌘R also starts or stops recording from the menu bar", size: 11, weight: .regular, color: .tertiaryLabelColor)
+        let helper = label("⌃⌘R starts or stops recording from anywhere", size: 11, weight: .regular, color: .tertiaryLabelColor)
         helper.alignment = .center
         return vertical([separator(), startStop, helper], spacing: 9)
     }
@@ -367,6 +396,9 @@ final class ControlsWindowController: NSWindowController {
     @objc private func toggle() { onToggleRecording?() }
     @objc private func revealRecordings() { onOpenRecordings?() }
     @objc private func revealSession() { onOpenSession?() }
+    @objc private func openNotes() { onOpenNotes?() }
+    @objc private func openBrief() { onOpenBrief?() }
+    @objc private func openProviderSetup() { onOpenProviderSetup?() }
 }
 
 private final class RoundedCardView: NSView {

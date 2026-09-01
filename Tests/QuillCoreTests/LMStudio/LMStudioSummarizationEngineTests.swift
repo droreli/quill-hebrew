@@ -19,6 +19,23 @@ import Testing
     #expect(try LMStudioConfiguration(endpoint: "http://[::1]:1234").endpoint.host == "::1")
 }
 
+@Test func generationProvenanceAlsoRejectsNonRootLoopbackEndpoints() {
+    for endpoint in [
+        "http://127.0.0.1:1234/v1",
+        "http://127.0.0.1:1234?next=1",
+        "http://127.0.0.1:1234#fragment",
+        "http://localhost:1234",
+    ] {
+        #expect(throws: MeetingIntelligenceContractError.self) {
+            try GenerationProvenance(
+                engine: "fixture", endpoint: endpoint, runtimeVersion: "test",
+                modelID: "fixture", modelRevision: nil, quantization: "none",
+                localOnly: true, provenance: "fixture"
+            )
+        }
+    }
+}
+
 @Test func engineUsesOnlyChatCompletionsAndEnrichesCanonicalEvidence() async throws {
     let port = 15101
     FakeLMStudioURLProtocol.configure(port: port, responses: [
@@ -102,6 +119,45 @@ import Testing
     }
 }
 
+@Test func emptyTranscriptIsRejectedBeforeAnyModelRequest() async throws {
+    let port = 15106
+    FakeLMStudioURLProtocol.configure(port: port, responses: [])
+    let engine = LMStudioSummarizationEngine(configuration: try configuration(port: port), session: fakeSession())
+    let empty = try SessionTranscript(
+        engine: "fixture", model: "fixture", createdAt: "2026-09-01T00:00:00Z",
+        speakerLabels: true, timestamps: true, segments: []
+    )
+    await #expect(throws: LMStudioError.self) {
+        try await engine.summarize(transcript: empty, rawNotes: notes(), input: .init(transcriptSHA256: "fixture", transcriptSegmentCount: 0, rawNotesRevision: 4))
+    }
+    #expect(FakeLMStudioURLProtocol.requests(port: port).isEmpty)
+}
+
+@Test func knownEvidenceIDDoesNotUpgradeInventedModelClaimToVerified() throws {
+    let decoder = BriefResponseDecoder()
+    let modelPayload = payload(evidenceID: "s000001", decisionText: "The board approved a budget of $10M.")
+    let brief = try decoder.makeMeetingBrief(
+        payload: modelPayload, transcript: transcript(), input: input(),
+        configuration: try configuration(port: 15107), createdAt: "2026-09-01T00:00:00Z", id: "trust-test"
+    )
+    #expect(brief.decisions[0].support == .aiGeneratedRequiresReview)
+    #expect(brief.overviewSupport == .aiGeneratedRequiresReview)
+    #expect(brief.warnings.contains(MeetingBrief.requiredReviewWarning))
+    #expect(BriefMarkdownRenderer.render(brief).contains("AI-generated draft — requires review"))
+}
+
+@Test func decoderRejectsUncitedStructuredModelItems() throws {
+    let decoder = BriefResponseDecoder()
+    let invalid = BriefResponseDecoder.ModelBriefPayload(
+        language: "english", overview: "Unverified overview.",
+        topics: [.init(id: "topic-1", text: "No source", evidenceSegmentIDs: [])],
+        decisions: [], actionItems: [], openQuestions: [], warnings: []
+    )
+    #expect(throws: LMStudioError.self) {
+        try decoder.makeMeetingBrief(payload: invalid, transcript: transcript(), input: input(), configuration: try configuration(port: 15108))
+    }
+}
+
 private func configuration(port: Int) throws -> LMStudioConfiguration {
     try LMStudioConfiguration(endpoint: "http://127.0.0.1:\(port)", modelID: "local/test-model", isEnabled: true, chunkTokenBudget: 128)
 }
@@ -130,12 +186,12 @@ private func input() -> SummaryInput {
     .init(transcriptSHA256: "fixture", transcriptSegmentCount: 2, rawNotesRevision: 4)
 }
 
-private func payload(evidenceID: String) -> BriefResponseDecoder.ModelBriefPayload {
+private func payload(evidenceID: String, decisionText: String = "Run a pilot") -> BriefResponseDecoder.ModelBriefPayload {
     .init(
         language: "english",
         overview: "Pilot discussion.",
         topics: [],
-        decisions: [.init(id: "decision-1", text: "Run a pilot", evidenceSegmentIDs: [evidenceID])],
+        decisions: [.init(id: "decision-1", text: decisionText, evidenceSegmentIDs: [evidenceID])],
         actionItems: [],
         openQuestions: [],
         warnings: []

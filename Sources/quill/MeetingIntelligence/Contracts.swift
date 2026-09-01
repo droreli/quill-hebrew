@@ -28,6 +28,14 @@ enum MeetingIntelligenceContractError: Error, Equatable, LocalizedError {
     }
 }
 
+/// Evidence links locate source material; they do not prove generated prose.
+/// Every human-readable claim carries a support state so it cannot be shown as
+/// verified merely because it cites a real transcript segment.
+enum BriefClaimSupport: String, Codable, Sendable, Equatable {
+    case aiGeneratedRequiresReview = "ai_generated_requires_review"
+    case quillSystemNotice = "quill_system_notice"
+}
+
 /// Canonical representation of a transcript on disk. Current transcripts do
 /// not have a schema version or segment IDs; both remain readable.
 struct SessionTranscript: Codable, Sendable, Equatable {
@@ -264,6 +272,31 @@ struct BriefItem: Codable, Sendable, Equatable, Identifiable {
     let id: String
     let text: String
     let evidence: [EvidenceReference]
+    let support: BriefClaimSupport
+
+    init(
+        id: String,
+        text: String,
+        evidence: [EvidenceReference],
+        support: BriefClaimSupport = .aiGeneratedRequiresReview
+    ) {
+        self.id = id
+        self.text = text
+        self.evidence = evidence
+        self.support = support
+    }
+
+    enum CodingKeys: String, CodingKey { case id, text, evidence, support }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        text = try container.decode(String.self, forKey: .text)
+        evidence = try container.decode([EvidenceReference].self, forKey: .evidence)
+        // Legacy artifacts did not express this boundary; read them
+        // conservatively as AI-generated material requiring review.
+        support = try container.decodeIfPresent(BriefClaimSupport.self, forKey: .support) ?? .aiGeneratedRequiresReview
+    }
 }
 
 struct ActionItem: Codable, Sendable, Equatable, Identifiable {
@@ -272,10 +305,37 @@ struct ActionItem: Codable, Sendable, Equatable, Identifiable {
     let owner: String?
     let dueDate: String?
     let evidence: [EvidenceReference]
+    let support: BriefClaimSupport
 
     enum CodingKeys: String, CodingKey {
-        case id, text, owner, evidence
+        case id, text, owner, evidence, support
         case dueDate = "due_date"
+    }
+
+    init(
+        id: String,
+        text: String,
+        owner: String?,
+        dueDate: String?,
+        evidence: [EvidenceReference],
+        support: BriefClaimSupport = .aiGeneratedRequiresReview
+    ) {
+        self.id = id
+        self.text = text
+        self.owner = owner
+        self.dueDate = dueDate
+        self.evidence = evidence
+        self.support = support
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        text = try container.decode(String.self, forKey: .text)
+        owner = try container.decodeIfPresent(String.self, forKey: .owner)
+        dueDate = try container.decodeIfPresent(String.self, forKey: .dueDate)
+        evidence = try container.decode([EvidenceReference].self, forKey: .evidence)
+        support = try container.decodeIfPresent(BriefClaimSupport.self, forKey: .support) ?? .aiGeneratedRequiresReview
     }
 }
 
@@ -283,11 +343,34 @@ struct SummaryInput: Codable, Sendable, Equatable {
     let transcriptSHA256: String
     let transcriptSegmentCount: Int
     let rawNotesRevision: Int
+    /// Optional only for legacy artifacts. New jobs always persist this digest.
+    let rawNotesSHA256: String?
 
     enum CodingKeys: String, CodingKey {
         case transcriptSHA256 = "transcript_sha256"
         case transcriptSegmentCount = "transcript_segment_count"
         case rawNotesRevision = "raw_notes_revision"
+        case rawNotesSHA256 = "raw_notes_sha256"
+    }
+
+    init(
+        transcriptSHA256: String,
+        transcriptSegmentCount: Int,
+        rawNotesRevision: Int,
+        rawNotesSHA256: String? = nil
+    ) {
+        self.transcriptSHA256 = transcriptSHA256
+        self.transcriptSegmentCount = transcriptSegmentCount
+        self.rawNotesRevision = rawNotesRevision
+        self.rawNotesSHA256 = rawNotesSHA256
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        transcriptSHA256 = try container.decode(String.self, forKey: .transcriptSHA256)
+        transcriptSegmentCount = try container.decode(Int.self, forKey: .transcriptSegmentCount)
+        rawNotesRevision = try container.decode(Int.self, forKey: .rawNotesRevision)
+        rawNotesSHA256 = try container.decodeIfPresent(String.self, forKey: .rawNotesSHA256)
     }
 }
 
@@ -342,13 +425,7 @@ struct GenerationProvenance: Codable, Sendable, Equatable {
             throw MeetingIntelligenceContractError.invalidEvidence("generator provenance must be local_only")
         }
         guard let endpoint else { return }
-        guard let url = URL(string: endpoint),
-              let host = url.host?.lowercased(),
-              url.scheme == "http",
-              ["127.0.0.1", "::1"].contains(host),
-              url.user == nil,
-              url.password == nil
-        else {
+        guard (try? LMStudioConfiguration.validateLoopbackEndpoint(endpoint)) != nil else {
             throw MeetingIntelligenceContractError.invalidEvidence("generator endpoint must be a literal HTTP loopback address")
         }
     }
@@ -362,6 +439,7 @@ struct MeetingBrief: Codable, Sendable, Equatable, Identifiable {
     let inputs: SummaryInput
     let generator: GenerationProvenance
     let overview: String
+    let overviewSupport: BriefClaimSupport
     let topics: [BriefItem]
     let decisions: [BriefItem]
     let actionItems: [ActionItem]
@@ -372,13 +450,17 @@ struct MeetingBrief: Codable, Sendable, Equatable, Identifiable {
         case schemaVersion = "schema_version"
         case id
         case createdAt = "created_at"
-        case language, inputs, generator, overview, topics, decisions
+        case language, inputs, generator, overview
+        case overviewSupport = "overview_support"
+        case topics, decisions
         case actionItems = "action_items"
         case openQuestions = "open_questions"
         case warnings
     }
 
-    init(schemaVersion: String = MeetingIntelligenceSchema.meetingBriefV1, id: String, createdAt: String, language: String, inputs: SummaryInput, generator: GenerationProvenance, overview: String, topics: [BriefItem], decisions: [BriefItem], actionItems: [ActionItem], openQuestions: [BriefItem], warnings: [String]) throws {
+    static let requiredReviewWarning = "AI-generated draft: review every claim against the transcript before relying on it. Evidence links are navigation aids, not verification."
+
+    init(schemaVersion: String = MeetingIntelligenceSchema.meetingBriefV1, id: String, createdAt: String, language: String, inputs: SummaryInput, generator: GenerationProvenance, overview: String, overviewSupport: BriefClaimSupport = .aiGeneratedRequiresReview, topics: [BriefItem], decisions: [BriefItem], actionItems: [ActionItem], openQuestions: [BriefItem], warnings: [String]) throws {
         self.schemaVersion = schemaVersion
         self.id = id
         self.createdAt = createdAt
@@ -386,11 +468,12 @@ struct MeetingBrief: Codable, Sendable, Equatable, Identifiable {
         self.inputs = inputs
         self.generator = generator
         self.overview = overview
+        self.overviewSupport = overviewSupport
         self.topics = topics
         self.decisions = decisions
         self.actionItems = actionItems
         self.openQuestions = openQuestions
-        self.warnings = warnings
+        self.warnings = Self.withRequiredReviewWarning(warnings)
         try validateStructure()
     }
 
@@ -403,11 +486,12 @@ struct MeetingBrief: Codable, Sendable, Equatable, Identifiable {
         inputs = try container.decode(SummaryInput.self, forKey: .inputs)
         generator = try container.decode(GenerationProvenance.self, forKey: .generator)
         overview = try container.decode(String.self, forKey: .overview)
+        overviewSupport = try container.decodeIfPresent(BriefClaimSupport.self, forKey: .overviewSupport) ?? .aiGeneratedRequiresReview
         topics = try container.decode([BriefItem].self, forKey: .topics)
         decisions = try container.decode([BriefItem].self, forKey: .decisions)
         actionItems = try container.decode([ActionItem].self, forKey: .actionItems)
         openQuestions = try container.decode([BriefItem].self, forKey: .openQuestions)
-        warnings = try container.decode([String].self, forKey: .warnings)
+        warnings = Self.withRequiredReviewWarning(try container.decode([String].self, forKey: .warnings))
         try validateStructure()
     }
 
@@ -415,7 +499,8 @@ struct MeetingBrief: Codable, Sendable, Equatable, Identifiable {
         guard schemaVersion == MeetingIntelligenceSchema.meetingBriefV1 else {
             throw MeetingIntelligenceContractError.unsupportedSchema(schemaVersion)
         }
-        guard inputs.transcriptSegmentCount >= 0, inputs.rawNotesRevision >= 0 else {
+        guard inputs.transcriptSegmentCount >= 0, inputs.rawNotesRevision >= 0,
+              inputs.rawNotesSHA256?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true else {
             throw MeetingIntelligenceContractError.invalidRange(context: "brief inputs")
         }
         try generator.validate()
@@ -423,6 +508,19 @@ struct MeetingBrief: Codable, Sendable, Equatable, Identifiable {
         var knownIDs = Set<String>()
         for id in ids where !knownIDs.insert(id).inserted {
             throw MeetingIntelligenceContractError.duplicateIdentifier(context: "brief item", id: id)
+        }
+        for item in topics + decisions + openQuestions {
+            try validate(item: item)
+        }
+        for item in actionItems {
+            guard !item.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !item.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !item.evidence.isEmpty else {
+                throw MeetingIntelligenceContractError.invalidEvidence("structured brief items must be non-empty and cited")
+            }
+        }
+        guard warnings.contains(Self.requiredReviewWarning) else {
+            throw MeetingIntelligenceContractError.invalidEvidence("brief must include the mandatory AI-review warning")
         }
         for evidence in allEvidence { try evidence.validateRange() }
     }
@@ -450,6 +548,35 @@ struct MeetingBrief: Codable, Sendable, Equatable, Identifiable {
             + decisions.flatMap(\.evidence)
             + actionItems.flatMap(\.evidence)
             + openQuestions.flatMap(\.evidence)
+    }
+
+    private static func withRequiredReviewWarning(_ warnings: [String]) -> [String] {
+        warnings.contains(requiredReviewWarning) ? warnings : [requiredReviewWarning] + warnings
+    }
+
+    private func validate(item: BriefItem) throws {
+        guard !item.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !item.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !item.evidence.isEmpty else {
+            throw MeetingIntelligenceContractError.invalidEvidence("structured brief items must be non-empty and cited")
+        }
+    }
+
+    static func incompleteTranscript(input: SummaryInput, createdAt: String = ISO8601DateFormatter().string(from: Date())) throws -> MeetingBrief {
+        try MeetingBrief(
+            id: UUID().uuidString,
+            createdAt: createdAt,
+            language: "undetermined",
+            inputs: input,
+            generator: .init(engine: "quill-pipeline", runtimeVersion: "quill", modelID: "none", modelRevision: nil, quantization: "none", localOnly: true, provenance: "quill-owned coverage check"),
+            overview: "No transcript segments are available, so no AI summary was requested.",
+            overviewSupport: .quillSystemNotice,
+            topics: [],
+            decisions: [],
+            actionItems: [],
+            openQuestions: [],
+            warnings: ["Transcript coverage is incomplete: the transcript contains zero segments. Generate a brief only after transcription produces canonical segments."]
+        )
     }
 }
 

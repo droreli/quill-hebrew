@@ -103,10 +103,10 @@ struct BriefResponseDecoder: Sendable {
                 )
             }
         }
-        let topics = try payload.topics.map { try BriefItem(id: $0.id, text: $0.text, evidence: evidence($0.evidenceSegmentIDs)) }
-        let decisions = try payload.decisions.map { try BriefItem(id: $0.id, text: $0.text, evidence: evidence($0.evidenceSegmentIDs)) }
-        let actions = try payload.actionItems.map { try ActionItem(id: $0.id, text: $0.text, owner: $0.owner, dueDate: $0.dueDate, evidence: evidence($0.evidenceSegmentIDs)) }
-        let questions = try payload.openQuestions.map { try BriefItem(id: $0.id, text: $0.text, evidence: evidence($0.evidenceSegmentIDs)) }
+        let topics = try payload.topics.map { try BriefItem(id: $0.id, text: $0.text, evidence: evidence($0.evidenceSegmentIDs), support: .aiGeneratedRequiresReview) }
+        let decisions = try payload.decisions.map { try BriefItem(id: $0.id, text: $0.text, evidence: evidence($0.evidenceSegmentIDs), support: .aiGeneratedRequiresReview) }
+        let actions = try payload.actionItems.map { try ActionItem(id: $0.id, text: $0.text, owner: $0.owner, dueDate: $0.dueDate, evidence: evidence($0.evidenceSegmentIDs), support: .aiGeneratedRequiresReview) }
+        let questions = try payload.openQuestions.map { try BriefItem(id: $0.id, text: $0.text, evidence: evidence($0.evidenceSegmentIDs), support: .aiGeneratedRequiresReview) }
         let generator = try GenerationProvenance(
             engine: "lmstudio-openai",
             endpoint: configuration.endpoint.absoluteString,
@@ -124,11 +124,14 @@ struct BriefResponseDecoder: Sendable {
             inputs: input,
             generator: generator,
             overview: payload.overview,
+            overviewSupport: .aiGeneratedRequiresReview,
             topics: topics,
             decisions: decisions,
             actionItems: actions,
             openQuestions: questions,
-            warnings: payload.warnings
+            // Model warnings are free-form claims as well. Keep only Quill's
+            // mandatory, deterministic review warning in the published brief.
+            warnings: []
         )
         try brief.validateEvidence(against: transcript)
         return brief
