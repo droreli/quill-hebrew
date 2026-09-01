@@ -126,7 +126,12 @@ final class MeetingNotesViewModel {
     }
 
     func setSaveState(_ state: SaveState) {
-        guard isBound || state == .unbound else { return }
+        if !isBound {
+            switch state {
+            case .unbound, .failed: break
+            case .waitingForSave, .saved: return
+            }
+        }
         saveState = state
         notifyChanged()
     }

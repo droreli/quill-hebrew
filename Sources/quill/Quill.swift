@@ -4,7 +4,7 @@ import CryptoKit
 import Foundation
 
 @main
-struct Quill: AsyncParsableCommand {
+struct Quill: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "quill",
         abstract: "Local meeting recorder + transcriber. Records mic and system audio as two tracks, then transcribes on-device.",
@@ -13,7 +13,7 @@ struct Quill: AsyncParsableCommand {
     )
 }
 
-struct Run: AsyncParsableCommand {
+struct Run: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "run",
         abstract: "Run the menu-bar daemon (default)."
@@ -31,10 +31,11 @@ struct Run: AsyncParsableCommand {
     @Flag(name: .long, help: "Open the controls window without starting a recording.")
     var controlsOnly = false
 
-    func run() async throws {
-        // AsyncParsableCommand is free to invoke subcommands from a cooperative
-        // executor. Hop explicitly to the main actor before touching AppKit.
-        try await MainActor.run { try runMain() }
+    func run() throws {
+        // The synchronous command root enters AppKit from the process main
+        // thread. `app.run()` must not be held inside a MainActor async job,
+        // because that would prevent note/transcription tasks from resuming.
+        try MainActor.assumeIsolated { try runMain() }
     }
 
     @MainActor
@@ -66,7 +67,7 @@ struct Run: AsyncParsableCommand {
         let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
         sigint.setEventHandler {
             FileHandle.standardError.write(Data("\nshutting down\n".utf8))
-            Task { @MainActor in controller.shutdown() }
+            MainActor.assumeIsolated { controller.shutdown() }
         }
         sigint.resume()
         signal(SIGINT, SIG_IGN)
@@ -96,7 +97,7 @@ struct Doctor: ParsableCommand {
 /// separate from recording and never opens any audio file: it submits only the
 /// canonical transcript plus the frozen raw-note revision to an already-running
 /// local LM Studio server.
-struct Brief: AsyncParsableCommand {
+struct Brief: ParsableCommand, Sendable {
     static let configuration = CommandConfiguration(
         commandName: "brief",
         abstract: "Explicitly generate a local meeting brief for one completed transcript."
@@ -114,7 +115,27 @@ struct Brief: AsyncParsableCommand {
     @Option(name: .long, help: "LM Studio model ID for this invocation.")
     var model: String?
 
-    func run() async throws {
+    func run() throws {
+        let sessionDirectory = sessionDirectory
+        let enable = enable
+        let endpoint = endpoint
+        let model = model
+        try BlockingAsyncCommand.run {
+            try await Self.generateBrief(
+                sessionDirectory: sessionDirectory,
+                enable: enable,
+                endpoint: endpoint,
+                model: model
+            )
+        }
+    }
+
+    private static func generateBrief(
+        sessionDirectory: String,
+        enable: Bool,
+        endpoint: String?,
+        model: String?
+    ) async throws {
         guard enable else {
             throw ValidationError("Refusing to generate a brief without --enable. This command never enables or saves provider settings implicitly.")
         }
@@ -151,6 +172,56 @@ struct Brief: AsyncParsableCommand {
             }
         }
         throw ValidationError("brief generation ended without a terminal result")
+    }
+}
+
+/// Bridges the one async CLI subcommand into ArgumentParser's synchronous root
+/// without sharing mutable task state. The app subcommand can therefore enter
+/// NSApplication's event loop directly on the main thread.
+private enum BlockingAsyncCommand {
+    static func run(
+        _ operation: @escaping @Sendable () async throws -> Void
+    ) throws {
+        let completion = Completion()
+        Task.detached {
+            do {
+                try await operation()
+                completion.finish(.success)
+            } catch {
+                completion.finish(.failure(error))
+            }
+        }
+        try completion.wait()
+    }
+
+    private final class Completion: @unchecked Sendable {
+        enum Outcome {
+            case success
+            case failure(any Error)
+        }
+
+        private let semaphore = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var outcome: Outcome?
+
+        func finish(_ outcome: Outcome) {
+            lock.lock()
+            self.outcome = outcome
+            lock.unlock()
+            semaphore.signal()
+        }
+
+        func wait() throws {
+            semaphore.wait()
+            lock.lock()
+            let outcome = self.outcome
+            lock.unlock()
+            switch outcome {
+            case .success: return
+            case let .failure(error): throw error
+            case nil: fatalError("Async command completed without an outcome")
+            }
+        }
     }
 }
 
@@ -374,28 +445,32 @@ final class AppController: NSObject, NSApplicationDelegate {
         noteSessionStartedAt = nil
         noteSessionEndedAt = nil
         notesWindow.viewModel.unbind()
-        Task { [weak self] in
-            do {
-                let store = try SessionNoteStore(sessionDirectory: directory, sessionID: identity)
+        do {
+            let store = try SessionNoteStore(sessionDirectory: directory, sessionID: identity)
+            noteStore = store
+            noteSessionID = identity
+            noteSessionStartedAt = startedAt
+            noteSessionEndedAt = nil
+            notesWindow.viewModel.bind(sessionID: identity)
+            Task { [weak self] in
                 let snapshot = await store.snapshot()
                 await MainActor.run {
                     guard self?.session?.dir == directory else { return }
-                    self?.noteStore = store
-                    self?.noteSessionID = identity
-                    self?.noteSessionStartedAt = startedAt
-                    self?.noteSessionEndedAt = nil
-                    self?.notesWindow.viewModel.bind(sessionID: identity, snapshot: snapshot)
-                }
-            } catch {
-                await MainActor.run {
-                    self?.notesWindow.viewModel.setSaveState(.failed(message: "Could not open local notes: \(error)"))
+                    _ = self?.notesWindow.viewModel.accept(snapshot: snapshot)
                 }
             }
+        } catch {
+            FileHandle.standardError.write(Data(
+                "meeting notes bind failed for \(directory.lastPathComponent): \(error)\n".utf8
+            ))
+            notesWindow.viewModel.setSaveState(.failed(message: "Could not open local notes: \(error)"))
         }
     }
 
     private func openNotes() {
-        if session == nil, let directory = latestSession ?? Self.latestCompletedSession(in: root) {
+        if let session {
+            if noteStore == nil { bindLiveNotes(to: session) }
+        } else if let directory = latestSession ?? Self.latestCompletedSession(in: root) {
             bindCompletedNotes(to: directory)
         }
         notesWindow.show()
