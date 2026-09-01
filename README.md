@@ -187,6 +187,11 @@ quill install --uninstall
 
 ## Stack
 
+Product planning for the next local-first phase:
+
+- [PRD: Quill Notes and Local Meeting Briefs](docs/PRD_LOCAL_MEETING_NOTES.md)
+- [Parallel Terra High work packages](docs/WORK_PACKAGES_LOCAL_MEETING_NOTES.md)
+
 - **Swift** — single SPM executable target
 - **Core Audio process tap** (`AudioHardwareCreateProcessTap`, macOS 14.2+) —
   system audio capture via a private aggregate device
