@@ -293,6 +293,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         controls.onOpenProviderSetup = { [weak self] in self?.providerSetup.show() }
         latestSession = Self.latestCompletedSession(in: root)
         controls.update(isRecording: false, session: latestSession)
+        refreshMeetingIntelligenceAvailability()
 
         notesWindow.viewModel.onCommand = { [weak self] command in
             self?.handleNotes(command)
@@ -369,6 +370,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             latestSession = newSession.dir
             controls.update(isRecording: true, session: newSession.dir)
             bindLiveNotes(to: newSession)
+            refreshMeetingIntelligenceAvailability()
             FileHandle.standardError.write(Data("● recording → \(newSession.dir.path)\n".utf8))
         } catch {
             FileHandle.standardError.write(Data("recording start failed: \(error)\n".utf8))
@@ -398,6 +400,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         noteSessionEndedAt = Self.sessionTiming(in: dir)?.ended ?? Date()
         latestSession = dir
         controls.update(isRecording: false, session: dir)
+        refreshMeetingIntelligenceAvailability()
         Task { [transcription] in await transcription.enqueue(dir) }
     }
 
@@ -412,6 +415,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         case .failed(let name):
             menuBar.updateTranscription("transcription failed · \(name)")
         }
+        refreshMeetingIntelligenceAvailability()
     }
 
     private func tick() {
@@ -552,9 +556,19 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func openBrief() {
+        guard session == nil else {
+            refreshMeetingIntelligenceAvailability()
+            return
+        }
         guard let directory = latestSession ?? Self.latestCompletedSession(in: root) else {
             briefViewModel.update(state: .missing, rawNotes: nil, sessionDirectory: nil)
             briefWindow.show()
+            return
+        }
+        guard FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("transcript.json").path
+        ) else {
+            refreshMeetingIntelligenceAvailability()
             return
         }
         latestSession = directory
@@ -563,6 +577,10 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func generateBrief() {
+        guard session == nil else {
+            briefViewModel.updateState(.failed(message: "Stop recording and wait for transcription before generating an AI brief."))
+            return
+        }
         guard let directory = latestSession ?? Self.latestCompletedSession(in: root) else {
             briefViewModel.updateState(.failed(message: "Choose a completed transcript first."))
             return
@@ -647,6 +665,19 @@ final class AppController: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    private func refreshMeetingIntelligenceAvailability() {
+        let directory = session?.dir ?? latestSession ?? Self.latestCompletedSession(in: root)
+        let transcriptReady = directory.map {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("transcript.json").path)
+        } ?? false
+        let availability = MeetingBriefAvailability(
+            isRecording: session != nil,
+            transcriptReady: transcriptReady
+        )
+        menuBar.updateBriefAvailability(availability)
+        controls.updateMeetingIntelligence(isRecording: session != nil, session: directory)
     }
 
     private static func latestCompletedSession(in root: URL) -> URL? {

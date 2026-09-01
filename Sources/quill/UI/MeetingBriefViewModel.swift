@@ -1,5 +1,45 @@
 import Foundation
 
+/// One shared readiness decision for every place that can open a meeting
+/// brief. A brief is a post-transcript artifact: it never reads live audio and
+/// must not look actionable while recording or transcription is still active.
+enum MeetingBriefAvailability: Equatable {
+    case recording
+    case waitingForTranscript
+    case ready
+
+    init(isRecording: Bool, transcriptReady: Bool) {
+        if isRecording {
+            self = .recording
+        } else if transcriptReady {
+            self = .ready
+        } else {
+            self = .waitingForTranscript
+        }
+    }
+
+    var canOpen: Bool { self == .ready }
+
+    var buttonTitle: String {
+        switch self {
+        case .recording: "Meeting brief — after recording"
+        case .waitingForTranscript: "Meeting brief — waiting for transcript"
+        case .ready: "Meeting brief…"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .recording:
+            "Capture notes now. AI Brief unlocks after you stop recording and transcription finishes."
+        case .waitingForTranscript:
+            "Transcribing locally… AI Brief unlocks automatically when the transcript is ready."
+        case .ready:
+            "Transcript ready. Generate a local AI brief whenever you choose."
+        }
+    }
+}
+
 /// Read-only state supplied by the post-meeting coordinator.  This deliberately
 /// contains no generation, persistence, transcript, or note-editing behavior.
 @MainActor

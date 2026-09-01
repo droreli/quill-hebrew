@@ -121,8 +121,9 @@ import Testing
     try await coordinator.enqueue(second)
     let secondBrief = second.appendingPathComponent("artifacts/meeting-brief.json")
     try await waitUntil { FileManager.default.fileExists(atPath: secondBrief.path) }
+    try await waitUntil { await coordinator.currentState() == .idle }
 
-    #expect(FileManager.default.fileExists(atPath: first.appendingPathComponent("artifacts/brief-job.json").path))
+    #expect(!FileManager.default.fileExists(atPath: first.appendingPathComponent("artifacts/brief-job.json").path))
     #expect(!FileManager.default.fileExists(atPath: second.appendingPathComponent("artifacts/brief-job.json").path))
     #expect(try String(contentsOf: first.appendingPathComponent("brief.log"), encoding: .utf8).contains("generation failed"))
 }

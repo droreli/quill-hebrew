@@ -9,6 +9,7 @@ final class MenuBarController {
     private let outputLabel: NSMenuItem
     private let transcriptionLabel: NSMenuItem
     private let toggleItem: NSMenuItem
+    private let openBriefItem: NSMenuItem
 
     var onToggle: (() -> Void)?
     var onOpenControls: (() -> Void)?
@@ -74,13 +75,13 @@ final class MenuBarController {
         openNotes.image = Self.symbol("note.text")
         menu.addItem(openNotes)
 
-        let openBrief = NSMenuItem(
+        openBriefItem = NSMenuItem(
             title: "Meeting brief…",
             action: #selector(openBriefClicked),
             keyEquivalent: "b"
         )
-        openBrief.image = Self.symbol("sparkles")
-        menu.addItem(openBrief)
+        openBriefItem.image = Self.symbol("sparkles")
+        menu.addItem(openBriefItem)
 
         let providerSetup = NSMenuItem(
             title: "Brief provider setup…",
@@ -100,7 +101,7 @@ final class MenuBarController {
         quit.image = Self.symbol("power")
         menu.addItem(quit)
 
-        for item in [openControls, toggleItem, openFolder, openNotes, openBrief, providerSetup, quit] {
+        for item in [openControls, toggleItem, openFolder, openNotes, openBriefItem, providerSetup, quit] {
             item.target = self
         }
 
@@ -134,6 +135,12 @@ final class MenuBarController {
     func updateTranscription(_ text: String?) {
         transcriptionLabel.title = text ?? ""
         transcriptionLabel.isHidden = text == nil
+    }
+
+    func updateBriefAvailability(_ availability: MeetingBriefAvailability) {
+        openBriefItem.title = availability.buttonTitle
+        openBriefItem.isEnabled = availability.canOpen
+        openBriefItem.toolTip = availability.guidance
     }
 
     /// Make the active mode visible at the only persistent control surface.

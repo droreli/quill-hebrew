@@ -199,6 +199,12 @@ actor PostMeetingCoordinator {
                     log(job.sessionDirectory, "generation cancelled")
                     publish(.cancelled(session: name))
                 } else {
+                    // The process reached the provider and received a final
+                    // failure (including timeout). This is no longer a crash-
+                    // recovery case: clear the durable marker so a later app
+                    // launch never retries model work without another explicit
+                    // user action. The Retry button creates a fresh marker.
+                    try? MeetingBriefStore(sessionDirectory: job.sessionDirectory).clearPending()
                     log(job.sessionDirectory, "generation failed: \(error)")
                     publish(.failed(session: name, message: String(describing: error)))
                 }

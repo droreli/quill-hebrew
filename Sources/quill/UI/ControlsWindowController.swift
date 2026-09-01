@@ -24,6 +24,10 @@ final class ControlsWindowController: NSWindowController {
     private let statusPill = RecordingStatusPill()
     private let startStop = NSButton(title: "Start recording", target: nil, action: nil)
     private let sessionButton = NSButton(title: "Reveal", target: nil, action: nil)
+    private let meetingNotesButton = NSButton(title: "Meeting notes…", target: nil, action: nil)
+    private let meetingBriefButton = NSButton(title: "Meeting brief…", target: nil, action: nil)
+    private let providerSetupButton = NSButton(title: "Provider setup…", target: nil, action: nil)
+    private let briefAvailabilityLabel = NSTextField(wrappingLabelWithString: "")
 
     init(root: URL, options: RecordingOptions) {
         self.options = options
@@ -67,6 +71,22 @@ final class ControlsWindowController: NSWindowController {
             sessionPath.setAccessibilityValue(session.path)
             sessionButton.isEnabled = true
         }
+        updateMeetingIntelligence(isRecording: isRecording, session: session)
+    }
+
+    func updateMeetingIntelligence(isRecording: Bool, session: URL?) {
+        let transcriptReady = session.map {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("transcript.json").path)
+        } ?? false
+        let availability = MeetingBriefAvailability(
+            isRecording: isRecording,
+            transcriptReady: transcriptReady
+        )
+        meetingBriefButton.title = availability.buttonTitle
+        meetingBriefButton.isEnabled = availability.canOpen
+        meetingBriefButton.setAccessibilityHelp(availability.guidance)
+        briefAvailabilityLabel.stringValue = availability.guidance
+        briefAvailabilityLabel.setAccessibilityValue(availability.guidance)
     }
 
     private func build(root: URL) {
@@ -139,6 +159,25 @@ final class ControlsWindowController: NSWindowController {
         startStop.controlSize = .large
         startStop.imagePosition = .imageLeading
         startStop.heightAnchor.constraint(equalToConstant: 48).isActive = true
+
+        meetingNotesButton.target = self
+        meetingNotesButton.action = #selector(openNotes)
+        meetingNotesButton.image = symbol("note.text", size: 12, weight: .medium)
+        meetingNotesButton.setAccessibilityHelp("Write private notes for the current or latest meeting.")
+        meetingBriefButton.target = self
+        meetingBriefButton.action = #selector(openBrief)
+        meetingBriefButton.image = symbol("sparkles", size: 12, weight: .medium)
+        providerSetupButton.target = self
+        providerSetupButton.action = #selector(openProviderSetup)
+        providerSetupButton.image = symbol("cpu", size: 12, weight: .medium)
+        for button in [meetingNotesButton, meetingBriefButton, providerSetupButton] {
+            button.bezelStyle = .rounded
+            button.imagePosition = .imageLeading
+        }
+        briefAvailabilityLabel.font = .systemFont(ofSize: 11, weight: .regular)
+        briefAvailabilityLabel.textColor = .secondaryLabelColor
+        briefAvailabilityLabel.maximumNumberOfLines = 2
+        briefAvailabilityLabel.setAccessibilityLabel("Meeting brief availability")
     }
 
     private func header() -> NSView {
@@ -197,22 +236,17 @@ final class ControlsWindowController: NSWindowController {
     }
 
     private func meetingIntelligenceCard() -> NSView {
-        let notes = NSButton(title: "Meeting notes…", target: self, action: #selector(openNotes))
-        notes.image = symbol("note.text", size: 12, weight: .medium)
-        let brief = NSButton(title: "Meeting brief…", target: self, action: #selector(openBrief))
-        brief.image = symbol("sparkles", size: 12, weight: .medium)
-        let provider = NSButton(title: "Provider setup…", target: self, action: #selector(openProviderSetup))
-        provider.image = symbol("cpu", size: 12, weight: .medium)
-        for button in [notes, brief, provider] {
-            button.bezelStyle = .rounded
-            button.imagePosition = .imageLeading
-        }
-        let actions = horizontal([notes, brief, provider], spacing: 8, alignment: .centerY)
+        let actions = horizontal(
+            [meetingNotesButton, meetingBriefButton, providerSetupButton],
+            spacing: 8,
+            alignment: .centerY
+        )
+        let body = vertical([actions, briefAvailabilityLabel], spacing: 7)
         return card(
             "sparkles",
             "Meeting intelligence",
-            "Notes stay local during a meeting. Brief generation is always an explicit post-transcript action.",
-            actions,
+            "Write private notes while recording. AI Brief uses only the finished transcript and those notes — never audio.",
+            body,
             "Meeting intelligence"
         )
     }

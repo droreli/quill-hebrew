@@ -70,6 +70,7 @@ final class MeetingNotesViewModel {
     private(set) var selectedNoteID: String?
     private(set) var draftText = ""
     private(set) var selectedTemplate: MeetingNoteTemplate = .general
+    private var clearDraftAfterSave = false
 
     /// Set by the coordinator. It should enqueue the command off the UI path
     /// and later call `accept(snapshot:)` or `setSaveState(_:)` on this model.
@@ -84,6 +85,7 @@ final class MeetingNotesViewModel {
         self.sessionID = sessionID
         selectedNoteID = nil
         draftText = ""
+        clearDraftAfterSave = false
         saveState = .saved(updatedAt: nil)
         if let snapshot {
             accept(snapshot: snapshot)
@@ -101,6 +103,7 @@ final class MeetingNotesViewModel {
         snapshot = nil
         selectedNoteID = nil
         draftText = ""
+        clearDraftAfterSave = false
         selectedTemplate = .general
         saveState = .unbound
         notifyChanged()
@@ -116,7 +119,11 @@ final class MeetingNotesViewModel {
         selectedTemplate = MeetingNoteTemplate.known(snapshot.template) ?? .general
         saveState = .saved(updatedAt: snapshot.updatedAt)
 
-        if let selectedNoteID,
+        if clearDraftAfterSave {
+            clearDraftAfterSave = false
+            selectedNoteID = nil
+            draftText = ""
+        } else if let selectedNoteID,
            !snapshot.notes.contains(where: { $0.id == selectedNoteID }) {
             self.selectedNoteID = nil
             draftText = ""
@@ -132,6 +139,7 @@ final class MeetingNotesViewModel {
             case .waitingForSave, .saved: return
             }
         }
+        if case .failed = state { clearDraftAfterSave = false }
         saveState = state
         notifyChanged()
     }
@@ -174,6 +182,7 @@ final class MeetingNotesViewModel {
             return
         }
         saveState = .waitingForSave
+        clearDraftAfterSave = true
         onCommand?(.saveNote(sessionID: sessionID, noteID: selectedNoteID, text: text))
         notifyChanged()
     }

@@ -8,7 +8,7 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
     let viewModel: MeetingNotesViewModel
 
     private let templateSelector = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let editor = NSTextView(frame: .zero)
+    private let editor = NotesTextView(frame: .zero)
     private let editorScrollView = NSScrollView()
     private let noteList = NSStackView()
     private let noteListScrollView = NSScrollView()
@@ -97,8 +97,8 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         editor.usesFindBar = true
         editor.isAutomaticQuoteSubstitutionEnabled = false
         editor.font = .systemFont(ofSize: 15)
-        editor.textColor = .labelColor
         editor.backgroundColor = .textBackgroundColor
+        editor.drawsBackground = true
         editor.insertionPointColor = .controlAccentColor
         editor.isVerticallyResizable = true
         editor.isHorizontallyResizable = false
@@ -111,13 +111,16 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         editorScrollView.hasVerticalScroller = true
         editorScrollView.autohidesScrollers = true
         editorScrollView.borderType = .bezelBorder
+        editorScrollView.drawsBackground = true
+        editorScrollView.backgroundColor = .textBackgroundColor
         editorScrollView.documentView = editor
+        editor.applyReadableAppearance()
 
         noteList.orientation = .vertical
         noteList.alignment = .leading
         noteList.spacing = 8
         noteList.translatesAutoresizingMaskIntoConstraints = false
-        let noteListContent = NSView()
+        let noteListContent = FlippedContentView()
         noteListContent.translatesAutoresizingMaskIntoConstraints = false
         noteListContent.addSubview(noteList)
         NSLayoutConstraint.activate([
@@ -131,6 +134,10 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         noteListScrollView.autohidesScrollers = true
         noteListScrollView.borderType = .bezelBorder
         noteListScrollView.documentView = noteListContent
+        NSLayoutConstraint.activate([
+            noteListContent.widthAnchor.constraint(equalTo: noteListScrollView.contentView.widthAnchor),
+            noteListContent.heightAnchor.constraint(greaterThanOrEqualTo: noteListScrollView.contentView.heightAnchor),
+        ])
         noteListScrollView.setAccessibilityLabel("Saved meeting notes")
 
         for button in [saveButton, newNoteButton, deleteButton, markerButton] {
@@ -212,10 +219,10 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         templateSelector.selectItem(at: templateIndex)
         templateSelector.isEnabled = bound
         editor.isEditable = bound
-        editor.textColor = bound ? .labelColor : .secondaryLabelColor
         if editor.string != viewModel.draftText { editor.string = viewModel.draftText }
+        editor.applyReadableAppearance()
         editor.setAccessibilityValue(viewModel.draftText)
-        saveButton.title = viewModel.hasSelectedNote ? "Save changes" : "Add note"
+        saveButton.title = viewModel.hasSelectedNote ? "Update note" : "Save note"
         saveButton.isEnabled = bound
         newNoteButton.isEnabled = bound && viewModel.hasSelectedNote
         deleteButton.isEnabled = bound && viewModel.hasSelectedNote
@@ -254,21 +261,27 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
 
     private func noteRow(_ note: RawMeetingNotes.Note) -> NSButton {
         let title = timestampText(note.capturedAtMS)
-        let preview = note.text.replacingOccurrences(of: "\n", with: " ")
-        let button = NSButton(title: "\(title)  \(preview)", target: self, action: #selector(noteSelected(_:)))
+        let preview = notePreview(note.text)
+        let button = NoteRowButton(timestamp: title, preview: preview)
+        button.target = self
+        button.action = #selector(noteSelected(_:))
         button.identifier = NSUserInterfaceItemIdentifier(note.id)
         button.tag = 0
-        button.setButtonType(.momentaryPushIn)
-        button.bezelStyle = .recessed
-        button.alignment = .natural
-        button.lineBreakMode = .byTruncatingTail
-        button.image = symbol("clock", size: 11)
-        button.imagePosition = .imageLeading
         button.setAccessibilityLabel("Note at \(title)")
         button.setAccessibilityValue(note.text)
         button.setAccessibilityHelp("Edit this note in the note editor.")
         button.state = note.id == viewModel.selectedNoteID ? .on : .off
         return button
+    }
+
+    private func notePreview(_ text: String) -> String {
+        let lines = text
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return "Empty note" }
+        let preview = lines.prefix(2).joined(separator: "  ·  ")
+        return lines.count > 2 ? "\(preview)…" : preview
     }
 
     private func emptyState(_ text: String) -> NSTextField {
@@ -284,7 +297,7 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         switch state {
         case .unbound: "No active meeting — notes are waiting for a session."
         case .waitingForSave: "Saving locally…"
-        case let .saved(updatedAt): updatedAt.map { "Saved locally · \($0)" } ?? "Ready to save locally"
+        case let .saved(updatedAt): updatedAt.map { "Saved locally · \(displayTime($0))" } ?? "Ready to save locally"
         case let .failed(message): "Couldn’t save: \(message)"
         }
     }
@@ -296,6 +309,14 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         case .saved: .systemGreen
         case .unbound: .secondaryLabelColor
         }
+    }
+
+    private func displayTime(_ isoTimestamp: String) -> String {
+        guard let date = ISO8601DateFormatter().date(from: isoTimestamp) else { return isoTimestamp }
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter.string(from: date)
     }
 
     private func timestampText(_ milliseconds: Int) -> String {
@@ -334,6 +355,11 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
     func textDidChange(_ notification: Notification) {
         guard !isApplyingModel else { return }
         viewModel.updateDraft(editor.string)
+        // AppKit may replace typing attributes when a different keyboard
+        // script starts a new run (notably Hebrew in Dark Mode). Recolor the
+        // actual storage after every edit so committed and pasted text cannot
+        // remain black-on-black even if the input manager reset its run.
+        editor.applyReadableAppearance()
     }
 
     @objc private func templateChanged() {
@@ -365,5 +391,104 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
 private extension Collection {
     subscript(safe index: Index) -> Element? {
         indices.contains(index) ? self[index] : nil
+    }
+}
+
+/// AppKit scroll views use a bottom-left document origin by default. A flipped
+/// document view keeps the newest note stack anchored at the visible top,
+/// which is the reading order users expect from a list.
+private final class FlippedContentView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+/// A native selectable row whose timestamp and note body are independent text
+/// fields. Keeping them separate prevents Unicode bidirectional reordering
+/// from folding Hebrew content into a leading Latin timestamp.
+private final class NoteRowButton: NSButton {
+    init(timestamp: String, preview: String) {
+        super.init(frame: .zero)
+        title = ""
+        setButtonType(.pushOnPushOff)
+        bezelStyle = .recessed
+
+        let timestampLabel = PassThroughTextField(labelWithString: timestamp)
+        timestampLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        timestampLabel.textColor = .secondaryLabelColor
+        timestampLabel.alignment = .left
+        timestampLabel.baseWritingDirection = .leftToRight
+
+        let previewLabel = PassThroughTextField(wrappingLabelWithString: preview)
+        previewLabel.font = .systemFont(ofSize: 13, weight: .regular)
+        previewLabel.textColor = .labelColor
+        previewLabel.alignment = .natural
+        previewLabel.baseWritingDirection = .natural
+        previewLabel.maximumNumberOfLines = 2
+        previewLabel.lineBreakMode = .byTruncatingTail
+
+        let content = NSStackView(views: [timestampLabel, previewLabel])
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 3
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            content.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 62),
+            previewLabel.widthAnchor.constraint(equalTo: content.widthAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+}
+
+private final class PassThroughTextField: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// NSTextView's default typing attributes can resolve to black even when the
+/// app is in Dark Mode. Reapply semantic text colors to both existing content
+/// and future keystrokes whenever the effective appearance changes.
+private final class NotesTextView: NSTextView {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyReadableAppearance()
+    }
+
+    func applyReadableAppearance() {
+        let resolvedFont = font ?? NSFont.systemFont(ofSize: 15)
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        // Dynamic text colors can be resolved outside the text view's drawing
+        // appearance when the app starts from launchd. Use explicit paired
+        // ink values here so typed text is never black-on-black or white-on-white.
+        let readableTextColor = isDark
+            ? NSColor(calibratedWhite: 0.96, alpha: 1)
+            : NSColor(calibratedWhite: 0.08, alpha: 1)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .natural
+        paragraph.baseWritingDirection = .natural
+        paragraph.lineBreakMode = .byWordWrapping
+
+        textColor = readableTextColor
+        backgroundColor = .textBackgroundColor
+        defaultParagraphStyle = paragraph
+        typingAttributes = [
+            .font: resolvedFont,
+            .foregroundColor: readableTextColor,
+            .paragraphStyle: paragraph,
+        ]
+        if let textStorage, textStorage.length > 0 {
+            textStorage.addAttributes(
+                [
+                    .font: resolvedFont,
+                    .foregroundColor: readableTextColor,
+                    .paragraphStyle: paragraph,
+                ],
+                range: NSRange(location: 0, length: textStorage.length)
+            )
+        }
     }
 }
