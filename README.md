@@ -114,6 +114,25 @@ workplace, and privacy rules that apply to you. See
 [PRIVACY_AND_CONSENT.md](PRIVACY_AND_CONSENT.md) before publishing or using a
 modified build.
 
+## Upcoming local meeting notes and briefs
+
+The next local-first phase proposes separate, timestamped raw notes and an
+explicit post-transcript meeting-brief draft. It is **planned, not yet an
+integrated released UI**: do not expect Notes, brief generation, or LM Studio
+controls in the current app until the integration owner confirms them. The
+planned brief uses only the canonical transcript and a frozen raw-note revision
+(not `mic.caf`, `system.caf`, or optional `mixed.m4a`), keeps raw notes separate
+from generated content, and has no cloud fallback, accounts, telemetry, or
+automatic sharing.
+
+The proposed LM Studio provider is opt-in and literal-loopback only
+(`127.0.0.1` or `::1`); Quill will never manage LM Studio or its models. The
+initial personal recommendation, `google/gemma-4-26b-a4b-qat`, is configurable
+and recorded with **reported**, not checksum-verified, runtime provenance.
+Read [Local Meeting Notes](docs/LOCAL_MEETING_NOTES.md) and
+[Privacy and consent](PRIVACY_AND_CONSENT.md) for the proposed flow, model
+boundary, retention, removal, recovery, and consent reminder.
+
 ## License and third-party components
 
 The Quill codebase is MIT-licensed; retain its copyright and license notice in
