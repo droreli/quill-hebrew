@@ -35,6 +35,12 @@ import Testing
 
     let views = window.contentView.map(allDescendants) ?? []
     let editor = try #require(views.compactMap { $0 as? NSTextView }.first)
+    // A visible scroll-view background is not proof that its document view
+    // has usable geometry. The live regression accepted input into a
+    // zero-width NSTextView, so notes saved while every glyph stayed hidden.
+    #expect(editor.frame.width > 200)
+    #expect(editor.bounds.width > 200)
+    #expect((editor.textContainer?.containerSize.width ?? 0) > 200)
     editor.string = ""
     editor.setSelectedRange(NSRange(location: 0, length: 0))
     // Reproduce the live failure mode: a launchd/input-manager path supplies

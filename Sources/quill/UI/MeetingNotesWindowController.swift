@@ -9,7 +9,7 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
 
     private let templateSelector = NSPopUpButton(frame: .zero, pullsDown: false)
     private let editor: NSTextView
-    private let editorScrollView = NSScrollView()
+    private let editorScrollView: NSScrollView
     private let noteTable = NSTableView()
     private let noteListScrollView = NSScrollView()
     private let noteListContainer = NSView()
@@ -27,7 +27,9 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
 
     init(viewModel: MeetingNotesViewModel) {
         self.viewModel = viewModel
-        self.editor = Self.makeEditor()
+        let editorSurface = Self.makeEditorSurface()
+        self.editor = editorSurface.editor
+        self.editorScrollView = editorSurface.scrollView
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 780, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
@@ -154,18 +156,16 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         statusLabel.setAccessibilityLabel("Notes save status")
     }
 
-    /// Build the editor with a normal explicit TextKit stack. The previous
-    /// subclass rewrote its storage and typing attributes during every edit;
-    /// that conflicts with AppKit's complex-script composition path. Keeping
-    /// the input manager in charge of its runs is the native rendering route.
-    private static func makeEditor() -> NSTextView {
-        let storage = NSTextStorage()
-        let layoutManager = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
-        container.widthTracksTextView = true
-        storage.addLayoutManager(layoutManager)
-        layoutManager.addTextContainer(container)
-        return NSTextView(frame: .zero, textContainer: container)
+    /// Use AppKit's native scrollable text-view pair so the document view
+    /// follows the scroll viewport as it is laid out. A manually assembled
+    /// zero-frame text view remains zero-width when assigned as `documentView`:
+    /// it can accept and save text, but TextKit has no line width to draw into.
+    private static func makeEditorSurface() -> (scrollView: NSScrollView, editor: NSTextView) {
+        let scrollView = NSTextView.scrollableTextView()
+        guard let editor = scrollView.documentView as? NSTextView else {
+            preconditionFailure("AppKit did not create a text view document")
+        }
+        return (scrollView, editor)
     }
 
     private func configureEditor() {
