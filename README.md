@@ -12,17 +12,21 @@ transcript. Nothing ever leaves the machine after the one-time model download.
 > This is an independent fork, not affiliated with or endorsed by digimata,
 > ivrit.ai, MLX Community, Apple, or Fluid Inference.
 
-Named for the feather. Sibling of [parrot](https://github.com/digimata/parrot), same skeleton: single
-Swift binary, menu-bar tray, no app bundle.
+Named for the feather. Sibling of [parrot](https://github.com/digimata/parrot),
+with the same local Swift core and a normal macOS app bundle for Finder,
+Spotlight, the Dock, and launch at login.
 
 ## Install
 
 ```sh
 cd quill
-swift build -c release
-sudo cp .build/release/quill /usr/local/bin/quill
-quill install --launch-at-login   # optional — runs in the background on login
+./scripts/install-app.sh
 ```
+
+This builds and ad-hoc signs `~/Applications/Quill.app`, registers it to start
+at login, and launches it without beginning a recording. After installation,
+open it normally from Spotlight by searching for **Quill**. The historical
+single-binary installation remains supported for developers.
 
 **Requires:** macOS 15+ (Core Audio process taps for system audio — no
 virtual device, no kernel extension). Apple Silicon recommended for

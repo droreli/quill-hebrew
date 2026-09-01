@@ -1,11 +1,11 @@
 import ArgumentParser
 import Foundation
 
-/// Manage quill's LaunchAgent so the daemon starts at login.
+/// Manage Quill's LaunchAgent so the menu-bar app starts at login.
 ///
-/// We deliberately do NOT use SMAppService.mainApp here — that requires a full
-/// .app bundle. Since quill ships as a single binary in /usr/local/bin, a
-/// plain LaunchAgent plist is the simpler, more honest mechanism.
+/// The public installer now ships a normal Quill.app bundle for Finder,
+/// Spotlight, and the Dock. A LaunchAgent remains the small, reversible login
+/// mechanism and points at the executable inside that bundle.
 struct Install: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Install or remove the launch-at-login LaunchAgent."
@@ -95,14 +95,22 @@ struct Install: ParsableCommand {
     }
 
     private func resolveBinaryPath() throws -> String {
-        // /usr/local/bin/quill is the canonical install path. Honor a real
-        // location if running from elsewhere (e.g. dev).
+        // When invoked from Quill.app, always register that exact executable.
+        // This avoids an older /usr/local/bin copy shadowing the app bundle.
+        let argv0 = CommandLine.arguments.first ?? "quill"
+        if argv0.hasPrefix("/"),
+           argv0.contains(".app/Contents/MacOS/"),
+           FileManager.default.isExecutableFile(atPath: argv0)
+        {
+            return URL(fileURLWithPath: argv0).standardizedFileURL.path
+        }
+
+        // Keep the historical single-binary installation working.
         let candidate = "/usr/local/bin/quill"
         if FileManager.default.isExecutableFile(atPath: candidate) {
             return candidate
         }
         // Fall back to the running executable's resolved path.
-        let argv0 = CommandLine.arguments.first ?? "quill"
         if argv0.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: argv0) {
             FileHandle.standardError.write(Data(
                 "note: /usr/local/bin/quill not found; using \(argv0)\n".utf8
