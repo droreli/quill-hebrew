@@ -8,12 +8,12 @@ existing application orchestrators.
 ## Parallel execution shape
 
 ```text
-Contract freeze (this document + PRD)
+WP0 Product contract + test-target spine (short serial gate)
         |
-        +-- WP1 Core contracts and tests
+        +-- WP1 Core Swift contracts
         +-- WP2 Raw-notes persistence
         +-- WP3 Notes window
-        +-- WP4 Local model adapter
+        +-- WP4 LM Studio loopback provider
         +-- WP5 Brief pipeline and store
         +-- WP6 Brief viewer
         +-- WP7 Setup and readiness UX
@@ -24,10 +24,10 @@ Contract freeze (this document + PRD)
                   WP10 Release QA
 ```
 
-WP1–WP8 begin in parallel. WP1 is merged first because it materializes the
-already-frozen contracts in Swift. Other packages rebase onto it; they do not
-wait to start. WP9 is intentionally the only package that owns existing
-orchestration files.
+WP0 is the only required serial gate: it creates the test target, fixtures, and
+producer/consumer contract. WP1 materializes that contract in Swift. WP2–WP8
+then execute in parallel against buildable shared types. WP9 is intentionally
+the only package that owns existing application orchestrators.
 
 ## Shared rules for every agent
 
@@ -36,14 +36,32 @@ orchestration files.
 - Do not revert or rewrite another package's changes.
 - Preserve `mic.caf`, `system.caf`, `mixed.m4a`, `meta.json`, and
   `transcript.json`; derived features never overwrite source artifacts.
-- No cloud API, account, telemetry, `URLSession`, hidden download, or daemon.
+- No cloud API, account, telemetry, hidden download, or Quill-managed daemon.
+  The sole network exception is WP4's opt-in loopback client, which accepts
+  only `127.0.0.1`/`::1`, disables proxies, and refuses redirects.
 - Use atomic file writes and versioned schemas.
 - Do not start a real recording during automated verification.
 - Each package ends with `swift build`, focused tests, and `git diff --check`.
 - Existing orchestration files are reserved for WP9 unless a package explicitly
   owns one below.
 
-## WP1 — Contracts and test harness
+## WP0 — Product contract and test-target spine
+
+**Purpose:** remove the hidden dependencies identified by the independent
+review before parallel implementation begins.
+
+**Outputs**
+
+- Freeze `raw-notes.v1`, `meeting-brief.v1`, evidence IDs, provider errors, and
+  generator provenance in this PRD.
+- Create a buildable Swift test target and transcript fixtures.
+- Decide the producer seam for canonical transcript segments without changing
+  capture or transcription behavior.
+
+**Acceptance:** `swift test`, current release build, and fixture decoding pass.
+**Dependencies:** none. This is the short serial gate.
+
+## WP1 — Core Swift contracts
 
 **Purpose:** encode the frozen schemas and give every parallel package a stable
 Swift API.
@@ -134,22 +152,26 @@ recording orchestration.
 **No touch:** `ControlsWindowController.swift`, `MenuBarController.swift`,
 `Quill.swift`, recording/transcription code.
 
-## WP4 — Embedded local model adapter
+## WP4 — LM Studio loopback provider
 
-**Purpose:** implement the richer fully local summarization engine behind the
-shared protocol.
+**Purpose:** implement a configurable local provider behind the shared protocol
+without coupling Quill to one model.
 
 **Owned files**
 
-- new MLX package entries in `Package.swift` after coordinating with WP1
-- `Sources/quill/MeetingIntelligence/MLXSummarizationEngine.swift`
+- `Sources/quill/MeetingIntelligence/LMStudioSummarizationEngine.swift`
+- `Sources/quill/MeetingIntelligence/LoopbackHTTPClient.swift`
 - `Sources/quill/MeetingIntelligence/PromptBuilder.swift`
-- `Sources/quill/MeetingIntelligence/GuidedBriefDecoder.swift`
+- `Sources/quill/MeetingIntelligence/BriefResponseDecoder.swift`
 - focused model-adapter tests and fakes
 
 **Outputs**
 
-- Embedded MLX Swift engine with pinned local model provenance.
+- OpenAI-compatible LM Studio chat-completions client using JSON-schema output.
+- Configurable model ID; initial personal setting is
+  `google/gemma-4-26b-a4b-qat`.
+- Strict literal-loopback endpoint validation, disabled system proxies, and no
+  redirects.
 - Segment-boundary chunking, constrained JSON extraction/reduction, timeout,
   cancellation, output cap, and release.
 - Strict validation: the model emits only allowed segment IDs; Quill enriches
@@ -160,14 +182,15 @@ shared protocol.
 
 - Fake-engine tests cover malformed JSON, unknown IDs, cancellation, timeout,
   mixed language, and long-meeting chunk/reduce.
-- Generation code contains no network client or downloader.
-- Missing weights fail with `model_not_installed`; failed integrity fails with
-  `model_integrity_failed`; neither falls back to cloud.
-- Model release returns GPU resources before another queued job.
+- Non-loopback endpoints are rejected before a request is built.
+- Server down or missing model returns `provider_unavailable`; malformed output
+  and model changes fail safely without touching recording/transcription.
+- No code launches, installs, downloads, or updates LM Studio.
+- Standard and uncensored variants use identical Quill-side evidence validation.
 
 **Dependencies:** WP1 protocol; starts with a local copy of the frozen contract.  
-**No touch:** audio, transcription engines, `TranscriptionCoordinator.swift`,
-UI, `Quill.swift`, existing Hebrew installer.
+**No touch:** `Package.swift`, audio, transcription engines,
+`TranscriptionCoordinator.swift`, UI, `Quill.swift`, existing Hebrew installer.
 
 ## WP5 — Brief pipeline and persistence
 
@@ -230,35 +253,32 @@ UI, `Quill.swift`.
 **No touch:** current controls/menu/app orchestrator, recording/transcription,
 model/persistence files.
 
-## WP7 — Model setup and readiness
+## WP7 — Provider setup and readiness
 
 **Purpose:** make the one-time local model boundary explicit and reversible.
 
 **Owned files**
 
-- `Sources/quill/MeetingIntelligence/ModelManifest.swift`
-- `Sources/quill/MeetingIntelligence/ModelReadiness.swift`
-- `Sources/quill/UI/ModelSetupWindowController.swift`
-- `scripts/install-summary-model.sh`
+- `Sources/quill/MeetingIntelligence/ProviderReadiness.swift`
+- `Sources/quill/UI/ProviderSetupWindowController.swift`
 - setup fixtures/tests
 
 **Outputs**
 
-- Manifest containing source, exact revision, SHA-256, size, license, runtime
-  compatibility, and local storage path.
-- Preflight for free disk, unified-memory tier, model integrity, and runtime.
-- Explicit user-invoked install/remove instructions and progress UI contract.
-- No invocation from normal run, recording, transcription, or generation.
+- Opt-in provider configuration and a loopback `GET /v1/models` readiness probe.
+- Display of reported model IDs plus the distinction between reported and
+  checksum-verified provenance.
+- Model selector and provider-unavailable guidance; no download management.
+- Readiness is never probed unless provider mode is explicitly enabled.
 
 **Acceptance**
 
-- No download begins without the explicit setup command/action.
-- Wrong hash or partial model is rejected and never used.
-- Removal names the exact model directory and leaves recordings untouched.
-- License/notice and expected disk use are shown before download.
+- Provider mode is off by default and requires explicit opt-in.
+- Non-loopback endpoints are rejected.
+- Provider/model absence leaves recording and transcription fully operational.
+- Quill does not launch, install, remove, or update LM Studio or its models.
 
-**Dependencies:** can start from the model decision in the PRD; later connects
-to WP4.  
+**Dependencies:** frozen loopback/provider contract; later connects to WP4.
 **No touch:** existing Hebrew MLX installer, audio, transcription, app
 orchestrator.
 
@@ -279,6 +299,8 @@ orchestrator.
 - Separate model-download boundary, model license/size/provenance, offline usage,
   retention, regeneration, removal, and recovery guidance.
 - Explanation that system audio may include unrelated playback/notifications.
+- LM Studio's updater, LAN settings, and model provenance remain outside
+  Quill's trust boundary; users are told to keep LAN serving disabled.
 
 **Acceptance**
 
@@ -352,6 +374,9 @@ feature flag until their gates pass.
 - notes autosave + quit/reopen recovery
 - incomplete/one-track/failed transcript behavior
 - malformed/unknown-evidence model output
+- provider disabled by default; literal-loopback/proxy/redirect enforcement
+- provider unavailable, model changed, and reported-provenance warnings
+- fixture bake-off across Gemma 12B/26B and Qwen 27B/35B candidates
 - cancellation, timeout, stale notes, and restart recovery
 - source-file hash preservation
 - Hebrew/English/mixed RTL and content review
@@ -368,8 +393,8 @@ microphone/system-audio permission state on another Mac.
 
 ## Suggested agent dispatch
 
-After the contract commit is merged, assign one Terra High agent to each of
-WP2–WP8 concurrently. Assign a separate integration owner to WP9 only after the
+After WP0/WP1 are merged, assign one Terra High agent to each of WP2–WP8
+concurrently. Assign a separate integration owner to WP9 only after the
 required packages pass their own tests. WP10 is an independent reviewer and
 must not repair implementation while auditing it.
 

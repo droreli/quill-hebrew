@@ -28,5 +28,27 @@ let package = Package(
                 ]),
             ]
         ),
+        .testTarget(
+            name: "QuillCoreTests",
+            dependencies: ["quill"],
+            path: "Tests",
+            sources: ["QuillCoreTests"],
+            resources: [.copy("Fixtures")],
+            swiftSettings: [
+                .unsafeFlags([
+                    "-load-plugin-library",
+                    "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib",
+                ]),
+            ],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-F", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+                    "-Xlinker", "-rpath",
+                    "-Xlinker", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+                    "-Xlinker", "-rpath",
+                    "-Xlinker", "/Library/Developer/CommandLineTools/Library/Developer/usr/lib",
+                ]),
+            ]
+        ),
     ]
 )

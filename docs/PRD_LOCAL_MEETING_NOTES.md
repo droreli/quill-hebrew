@@ -111,6 +111,7 @@ Job to be done:
   ```
 
 - A native meeting-brief viewer and Finder reveal actions.
+- An opt-in LM Studio loopback provider, disabled until explicitly configured.
 - Unit/integration fixtures for Hebrew, English, mixed language, overlaps, and
   incomplete transcripts.
 
@@ -184,11 +185,13 @@ writes. AI output is never written to this file.
     "raw_notes_revision": 12
   },
   "generator": {
-    "engine": "mlx-qwen3",
-    "runtime_version": "pinned",
-    "model_id": "pinned",
-    "model_revision": "pinned",
+    "engine": "lmstudio-openai",
+    "endpoint": "http://127.0.0.1:1234",
+    "runtime_version": "reported",
+    "model_id": "google/gemma-4-26b-a4b-qat",
+    "model_revision": null,
     "quantization": "4-bit",
+    "provenance": "reported",
     "local_only": true
   },
   "overview": "...",
@@ -219,26 +222,35 @@ IDs are derived deterministically from array order.
 
 ## 7. Local model direction
 
-### Recommended candidate
+### MVP provider: LM Studio loopback
 
-Use an embedded MLX Swift adapter with a pinned 4-bit Qwen3 4B Instruct model,
-subject to the quality, license, memory, and performance gates below. Qwen3 is
-a strong candidate for Hebrew/English/mixed content, while MLX fits Quill's
-Apple-silicon-only product boundary.
+The first working slice uses the LM Studio server already available on the
+user's Mac. It is an opt-in `SummarizationEngine` implementation, not a cloud
+API and not a replacement for Quill's Whisper/Parakeet transcription engines.
 
-- [MLX Swift LM](https://github.com/ml-explore/mlx-swift-lm)
-- [MLX guided JSON generation](https://github.com/ml-explore/mlx-swift-lm/tree/main/Libraries/MLXGuidedGeneration)
-- [Qwen3 release](https://qwenlm.github.io/blog/qwen3/)
-- [Qwen3 4B model card](https://huggingface.co/Qwen/Qwen3-4B)
+- The only accepted endpoints are literal `127.0.0.1` and `::1` loopback.
+- System proxies are disabled and redirects are refused.
+- Quill never launches, installs, updates, or downloads through LM Studio.
+- Server/model absence returns `provider_unavailable` without affecting capture
+  or transcription.
+- The selected model is configurable and recorded with each artifact.
+- Provider model identity is reported rather than checksum-verified; artifacts
+  record `provenance: reported`.
 
-Weights are never bundled. Setup downloads a pinned artifact to
-`~/Library/Application Support/quill/models/`, verifies SHA-256, records its
-license and provenance, and supports removal/re-download. Normal recording,
-transcription, and generation paths contain no download code.
+The initial personal profile uses `google/gemma-4-26b-a4b-qat`, while the
+fixture bake-off compares it with `google/gemma-4-12b-qat`,
+`qwen/qwen3.8-27b`, `qwen3.8-27b-uncensored-mlx`, and the available 35B-A3B
+candidate. No model becomes a public default without evidence from Hebrew,
+English, and mixed-language fixtures. An uncensored fine-tune may be used
+personally if it wins, but it is not a recommended public default until its
+license, abstention, and hallucination behavior pass the same gates.
 
-Fallback: a pinned `llama.cpp` executable plus a verified GGUF model can
-implement the same protocol without a daemon. Ollama may be supported later as
-an opt-in adapter, but it is not the default dependency.
+### Portable provider later
+
+An embedded MLX Swift or pinned `llama.cpp` engine may later provide a
+self-contained public installation without LM Studio. It uses the same
+`SummarizationEngine` and evidence-validation contracts and remains behind a
+separate model, license, checksum, memory, and performance gate.
 
 ### Inference policy
 
@@ -320,16 +332,23 @@ Metrics are local and user-visible or measured against repository fixtures:
 - Regeneration and user-edit counts stored only within the local session if the
   user enables local product diagnostics.
 - Peak memory, thermal state, and wall time across supported Mac memory tiers.
+- A per-model bake-off report covering JSON validity, evidence coverage,
+  unsupported claims, owner/date abstention, latency, and peak memory.
 
 ## 11. Risk gates
 
 1. **Product gate:** approve explicit, post-transcript generation for MVP.
 2. **Schema gate:** old and current sessions decode without mutation.
-3. **Privacy gate:** no network-capable generation path or silent download.
-4. **Model gate:** pinned model/revision/license/checksum and Hebrew/mixed
-   benchmark pass before it becomes the default.
+3. **Privacy gate:** no off-device generation path or silent download. The only
+   permitted network client is the opt-in loopback provider with a literal-host
+   allow-list, proxies disabled, and redirects refused.
+4. **Model gate:** Hebrew/mixed benchmark passes before a model becomes a
+   default. Reported/unverifiable provider provenance and uncensored fine-tunes
+   cannot become the recommended public default.
 5. **Resource gate:** transcription releases GPU resources before generation;
-   timeout and cancellation are verified.
+   timeout and cancellation are verified. External-provider memory cannot be
+   controlled by Quill, so provider use never blocks recording and contention
+   is surfaced as a warning.
 6. **Quality gate:** evidence validation and unsupported-claim rejection pass.
 7. **Release gate:** automated tests, release build, offline run, RTL/VoiceOver
    review, and manual no-recording UI verification pass.
