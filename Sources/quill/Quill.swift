@@ -1,5 +1,6 @@
 import AppKit
 import ArgumentParser
+import CryptoKit
 import Foundation
 
 @main
@@ -173,13 +174,21 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var noteStore: SessionNoteStore?
     private var noteSessionID: String?
     private var noteSessionStartedAt: Date?
-    private var briefCoordinator: PostMeetingCoordinator?
+    private var noteSessionEndedAt: Date?
+    /// One coordinator lives for the entire application process.  In
+    /// particular, reopening the brief window, retrying, or resuming a durable
+    /// job never replaces an in-flight queue with a new coordinator.
+    private let briefEngine: ReconfigurableBriefEngine
+    private let briefCoordinator: BriefCoordinatorOwner
 
     init(root: URL, options: RecordingOptions) {
         self.root = root
         self.options = options
         self.transcription = TranscriptionCoordinator()
         self.controls = ControlsWindowController(root: root, options: options)
+        let briefEngine = ReconfigurableBriefEngine(provider: Config.lmStudioProvider())
+        self.briefEngine = briefEngine
+        self.briefCoordinator = BriefCoordinatorOwner(engine: briefEngine)
         self.globalRecordHotKey = nil
         super.init()
         globalRecordHotKey = GlobalHotKey.recordingToggle { [weak self] in
@@ -238,9 +247,18 @@ final class AppController: NSObject, NSApplicationDelegate {
             await transcription.resumePending(root: root)
         }
 
-        // Only durable markers from a previous *explicit* generation request
-        // are resumed. A directory with merely a transcript is never queued.
-        resumeExplicitBriefsIfConfigured()
+        // Install the brief status route once, before any durable explicit
+        // request is resumed. A directory with merely a transcript is never
+        // queued at startup.
+        let briefReference = AppControllerReference(self)
+        Task { [briefCoordinator, root, briefReference] in
+            await briefCoordinator.installStatusHandler { state in
+                Task { @MainActor in briefReference.value?.showBriefStatus(state) }
+            }
+            if Config.lmStudioProvider().isEnabled {
+                await briefCoordinator.resumePending(root: root)
+            }
+        }
     }
 
     /// Stop any live session cleanly (finalizing files) and exit.
@@ -306,6 +324,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         menuBar.update(recording: false, elapsed: nil)
 
         let dir = session.dir
+        noteSessionEndedAt = Self.sessionTiming(in: dir)?.ended ?? Date()
         latestSession = dir
         controls.update(isRecording: false, session: dir)
         Task { [transcription] in await transcription.enqueue(dir) }
@@ -347,6 +366,14 @@ final class AppController: NSObject, NSApplicationDelegate {
         let directory = recording.dir
         let identity = recording.sessionID
         let startedAt = recording.startedAt
+        // Commands are disabled while the asynchronous store opens. This
+        // prevents a visible previous session from receiving a command meant
+        // for this one, and makes the waiting state explicit in the UI.
+        noteStore = nil
+        noteSessionID = nil
+        noteSessionStartedAt = nil
+        noteSessionEndedAt = nil
+        notesWindow.viewModel.unbind()
         Task { [weak self] in
             do {
                 let store = try SessionNoteStore(sessionDirectory: directory, sessionID: identity)
@@ -356,6 +383,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                     self?.noteStore = store
                     self?.noteSessionID = identity
                     self?.noteSessionStartedAt = startedAt
+                    self?.noteSessionEndedAt = nil
                     self?.notesWindow.viewModel.bind(sessionID: identity, snapshot: snapshot)
                 }
             } catch {
@@ -375,6 +403,11 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func bindCompletedNotes(to directory: URL) {
         guard noteStore == nil || noteSessionID == nil || session?.dir != directory else { return }
+        noteStore = nil
+        noteSessionID = nil
+        noteSessionStartedAt = nil
+        noteSessionEndedAt = nil
+        notesWindow.viewModel.unbind()
         Task { [weak self] in
             do {
                 let store = try SessionNoteStore(sessionDirectory: directory)
@@ -384,7 +417,9 @@ final class AppController: NSObject, NSApplicationDelegate {
                     self?.latestSession = directory
                     self?.noteStore = store
                     self?.noteSessionID = snapshot.sessionID
-                    self?.noteSessionStartedAt = Self.startedAt(in: directory)
+                    let timing = Self.sessionTiming(in: directory)
+                    self?.noteSessionStartedAt = timing?.started
+                    self?.noteSessionEndedAt = timing?.ended
                     self?.notesWindow.viewModel.bind(sessionID: snapshot.sessionID, snapshot: snapshot)
                 }
             } catch {
@@ -433,7 +468,8 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func meetingRelativeMilliseconds() -> Int {
         guard let startedAt = noteSessionStartedAt else { return 0 }
-        return max(0, Int(Date().timeIntervalSince(startedAt) * 1_000))
+        let effectiveEnd = noteSessionEndedAt ?? Date()
+        return max(0, Int(effectiveEnd.timeIntervalSince(startedAt) * 1_000))
     }
 
     private func timestampMarker() -> String {
@@ -451,24 +487,6 @@ final class AppController: NSObject, NSApplicationDelegate {
         briefWindow.show()
     }
 
-    private func refreshBriefPresentation(for directory: URL) {
-        Task { [weak self] in
-            let rawNotes = try? await SessionNoteStore(sessionDirectory: directory).snapshot()
-            let state: MeetingBriefViewModel.State
-            let briefURL = MeetingBriefStore(sessionDirectory: directory).briefURL
-            if let data = try? Data(contentsOf: briefURL), let brief = try? JSONDecoder().decode(MeetingBrief.self, from: data) {
-                state = .ready(brief)
-            } else if FileManager.default.fileExists(atPath: directory.appendingPathComponent("transcript.json").path) {
-                state = .missing
-            } else {
-                state = .failed(message: "Transcript is not ready yet. Generate a brief only after transcription completes.")
-            }
-            await MainActor.run {
-                self?.briefViewModel.update(state: state, rawNotes: rawNotes, sessionDirectory: directory)
-            }
-        }
-    }
-
     private func generateBrief() {
         guard let directory = latestSession ?? Self.latestCompletedSession(in: root) else {
             briefViewModel.updateState(.failed(message: "Choose a completed transcript first."))
@@ -484,18 +502,15 @@ final class AppController: NSObject, NSApplicationDelegate {
             return
         }
         do {
-            let configuration = try Config.lmStudioConfiguration(provider: provider)
-            let coordinator = PostMeetingCoordinator(engine: LMStudioSummarizationEngine(configuration: configuration))
-            briefCoordinator = coordinator
-            let reference = AppControllerReference(self)
-            Task {
-                await coordinator.setStatusHandler { state in
-                    Task { @MainActor in reference.value?.showBriefStatus(state, directory: directory) }
-                }
+            _ = try Config.lmStudioConfiguration(provider: provider)
+            Task { [briefEngine, briefCoordinator] in
+                await briefEngine.reconfigure(provider: provider)
                 do {
-                    try await coordinator.enqueue(directory)
+                    try await briefCoordinator.enqueue(directory)
                 } catch {
-                    await MainActor.run { reference.value?.briefViewModel.updateState(.failed(message: "\(error)")) }
+                    await MainActor.run { [weak self] in
+                        self?.briefViewModel.updateState(.failed(message: "\(error)"))
+                    }
                 }
             }
         } catch {
@@ -503,25 +518,27 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func showBriefStatus(_ state: PostMeetingCoordinator.State, directory: URL) {
+    private func showBriefStatus(_ state: PostMeetingCoordinator.State) {
+        let directory = briefSessionDirectory(for: state)
         switch state {
         case .idle: break
         case let .preparing(_, queued):
             briefViewModel.updateState(.processing(message: queued > 0 ? "Preparing locally; \(queued) waiting." : "Preparing frozen local inputs."))
         case let .generating(_, queued):
             briefViewModel.updateState(.processing(message: queued > 0 ? "Generating locally; \(queued) waiting." : "Generating from transcript and notes only."))
-        case .ready:
-            refreshBriefPresentation(for: directory)
+        case let .ready(_, stale):
+            if let directory { refreshBriefPresentation(for: directory, coordinatorReportedStale: stale) }
         case let .failed(_, message):
             briefViewModel.updateState(.failed(message: message))
         case .cancelled:
-            briefViewModel.updateState(.missing)
+            if let directory { refreshBriefPresentation(for: directory) }
+            else { briefViewModel.updateState(.missing) }
         }
     }
 
     private func cancelBrief() {
-        guard let directory = briefViewModel.sessionDirectory, let coordinator = briefCoordinator else { return }
-        Task { _ = await coordinator.cancel(directory) }
+        guard let directory = briefViewModel.sessionDirectory else { return }
+        Task { [briefCoordinator] in _ = await briefCoordinator.cancel(directory) }
     }
 
     private func revealBriefSession() {
@@ -537,6 +554,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func saveProvider(_ provider: LMStudioProviderConfiguration) {
         do {
             try Config.saveLMStudioProvider(provider)
+            Task { [briefEngine] in await briefEngine.reconfigure(provider: provider) }
             providerSetup.update(readiness: provider.isEnabled ? .unavailable(.providerUnavailable("Saved. Check availability when LM Studio is running locally.")) : .disabled)
         } catch {
             providerSetup.update(readiness: .unavailable(.invalidConfiguration("Could not save local provider settings: \(error)")))
@@ -556,14 +574,6 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func resumeExplicitBriefsIfConfigured() {
-        let provider = Config.lmStudioProvider()
-        guard provider.isEnabled, let configuration = try? Config.lmStudioConfiguration(provider: provider) else { return }
-        let coordinator = PostMeetingCoordinator(engine: LMStudioSummarizationEngine(configuration: configuration))
-        briefCoordinator = coordinator
-        Task { await coordinator.resumePending(root: root) }
-    }
-
     private static func latestCompletedSession(in root: URL) -> URL? {
         let manager = FileManager.default
         guard let entries = try? manager.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey]) else { return nil }
@@ -572,12 +582,53 @@ final class AppController: NSObject, NSApplicationDelegate {
         }.sorted { $0.lastPathComponent > $1.lastPathComponent }.first
     }
 
-    private static func startedAt(in directory: URL) -> Date? {
+    private func briefSessionDirectory(for state: PostMeetingCoordinator.State) -> URL? {
+        let name: String? = switch state {
+        case .idle: nil
+        case let .preparing(session, _), let .generating(session, _), let .ready(session, _), let .failed(session, _), let .cancelled(session): session
+        }
+        guard let name else { return nil }
+        if briefViewModel.sessionDirectory?.lastPathComponent == name { return briefViewModel.sessionDirectory }
+        if latestSession?.lastPathComponent == name { return latestSession }
+        return (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil))?
+            .first(where: { $0.lastPathComponent == name })
+    }
+
+    private func refreshBriefPresentation(
+        for directory: URL,
+        coordinatorReportedStale: Bool = false
+    ) {
+        Task { [weak self] in
+            let rawNotes = try? await SessionNoteStore(sessionDirectory: directory).snapshot()
+            let state: MeetingBriefViewModel.State
+            let briefURL = MeetingBriefStore(sessionDirectory: directory).briefURL
+            if let data = try? Data(contentsOf: briefURL), let brief = try? JSONDecoder().decode(MeetingBrief.self, from: data) {
+                state = meetingBriefPresentationState(
+                    brief: brief,
+                    sessionDirectory: directory,
+                    rawNotes: rawNotes,
+                    coordinatorReportedStale: coordinatorReportedStale
+                )
+            } else if FileManager.default.fileExists(atPath: directory.appendingPathComponent("transcript.json").path) {
+                state = .missing
+            } else {
+                state = .failed(message: "Transcript is not ready yet. Generate a brief only after transcription completes.")
+            }
+            await MainActor.run {
+                self?.briefViewModel.update(state: state, rawNotes: rawNotes, sessionDirectory: directory)
+            }
+        }
+    }
+
+    private static func sessionTiming(in directory: URL) -> (started: Date?, ended: Date?)? {
         guard let data = try? Data(contentsOf: directory.appendingPathComponent("meta.json")),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let value = object["started"] as? String
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
-        return ISO8601DateFormatter().date(from: value)
+        let formatter = ISO8601DateFormatter()
+        return (
+            (object["started"] as? String).flatMap(formatter.date(from:)),
+            (object["ended"] as? String).flatMap(formatter.date(from:))
+        )
     }
 
     private static func format(_ interval: TimeInterval) -> String {
@@ -594,5 +645,107 @@ private final class AppControllerReference: @unchecked Sendable {
 
     init(_ value: AppController) {
         self.value = value
+    }
+}
+
+/// Converts durable artifact provenance into the viewer state. Keeping this
+/// small decision point outside AppKit makes stale-input behavior testable
+/// without starting a recorder or constructing `AppController`.
+@MainActor
+func meetingBriefPresentationState(
+    brief: MeetingBrief,
+    sessionDirectory: URL,
+    rawNotes: RawMeetingNotes?,
+    coordinatorReportedStale: Bool = false
+) -> MeetingBriefViewModel.State {
+    if coordinatorReportedStale || currentBriefInputsAreStale(
+        brief: brief,
+        sessionDirectory: sessionDirectory,
+        rawNotes: rawNotes
+    ) {
+        return .stale(brief)
+    }
+    return .ready(brief)
+}
+
+private func currentBriefInputsAreStale(
+    brief: MeetingBrief,
+    sessionDirectory: URL,
+    rawNotes: RawMeetingNotes?
+) -> Bool {
+    guard let transcriptData = try? Data(contentsOf: sessionDirectory.appendingPathComponent("transcript.json")),
+          sha256(transcriptData) == brief.inputs.transcriptSHA256,
+          let rawNotes,
+          rawNotes.revision == brief.inputs.rawNotesRevision
+    else { return true }
+    // Legacy artifacts have no raw-note digest. Their recorded revision is the
+    // only available comparison; current artifacts always use the digest.
+    guard let expectedDigest = brief.inputs.rawNotesSHA256 else { return false }
+    return (try? sortedRawNotesDigest(rawNotes)) != expectedDigest
+}
+
+private func sortedRawNotesDigest(_ rawNotes: RawMeetingNotes) throws -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return sha256(try encoder.encode(rawNotes))
+}
+
+private func sha256(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
+/// A stable routing layer lets one application-owned coordinator retain its
+/// durable queue while the user changes the optional provider settings. Each
+/// invocation snapshots the provider and finishes with that configuration;
+/// later saves apply only to subsequent jobs.
+actor ReconfigurableBriefEngine: SummarizationEngine {
+    private var provider: LMStudioProviderConfiguration
+
+    init(provider: LMStudioProviderConfiguration) {
+        self.provider = provider
+    }
+
+    func reconfigure(provider: LMStudioProviderConfiguration) {
+        self.provider = provider
+    }
+
+    func summarize(
+        transcript: SessionTranscript,
+        rawNotes: RawMeetingNotes,
+        input: SummaryInput
+    ) async throws -> MeetingBrief {
+        let configuration = try Config.lmStudioConfiguration(provider: provider)
+        let engine = LMStudioSummarizationEngine(configuration: configuration)
+        return try await engine.summarize(transcript: transcript, rawNotes: rawNotes, input: input)
+    }
+}
+
+/// The narrow, testable owner for the one coordinator used by `AppController`.
+/// It intentionally permits its status route to be installed just once: a
+/// second brief window or a provider save cannot detach resumed-job updates.
+actor BriefCoordinatorOwner {
+    private let coordinator: PostMeetingCoordinator
+    private var hasStatusHandler = false
+
+    init(engine: any SummarizationEngine) {
+        coordinator = PostMeetingCoordinator(engine: engine)
+    }
+
+    func installStatusHandler(_ handler: @escaping @Sendable (PostMeetingCoordinator.State) -> Void) async {
+        guard !hasStatusHandler else { return }
+        hasStatusHandler = true
+        await coordinator.setStatusHandler(handler)
+    }
+
+    func enqueue(_ directory: URL) async throws {
+        try await coordinator.enqueue(directory)
+    }
+
+    func cancel(_ directory: URL) async -> Bool {
+        await coordinator.cancel(directory)
+    }
+
+    func resumePending(root: URL) async {
+        await coordinator.resumePending(root: root)
     }
 }

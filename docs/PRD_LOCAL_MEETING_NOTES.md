@@ -1,6 +1,6 @@
 # PRD: Quill Notes and Local Meeting Briefs
 
-Status: Proposed MVP  
+Status: Shipped MVP thin slice
 Owner: Quill Hebrew  
 Platform: Apple-silicon Mac, macOS 15+  
 Privacy posture: local-only after an explicit model download
@@ -10,7 +10,7 @@ Privacy posture: local-only after an explicit model download
 Quill should become a private local meeting notebook, not a cloud meeting bot.
 The user writes a few short cues while a meeting is being recorded. After the
 existing local transcript is ready, an on-device model uses the transcript and
-those cues to create a concise, editable, evidence-linked meeting brief.
+those cues to create a concise, evidence-linked meeting brief.
 
 The core value is **user-directed recall**: the raw notes say what deserves
 attention; the transcript supplies detail and evidence.
@@ -67,7 +67,8 @@ Job to be done:
 - A keyboard-first Notes window opens or can be opened from Quill.
 - The user writes short Markdown-style headings and bullets.
 - A note can be submitted with an automatic meeting-relative timestamp.
-- Notes autosave atomically to the active session without blocking audio.
+- The user explicitly saves each note; each save writes atomically to the
+  active session without blocking audio.
 - Closing the window does not stop recording or lose notes.
 
 ### After recording
@@ -81,7 +82,7 @@ Job to be done:
 
 ### Review
 
-- Quill presents separate, editable sections:
+- Quill presents separate, read-only sections:
   - Overview
   - Key topics
   - Decisions
@@ -89,15 +90,16 @@ Job to be done:
   - Open questions
   - Warnings / incomplete coverage
 - Every nontrivial item exposes its source transcript timestamp(s).
-- The user can edit raw notes and regenerate. Existing generated output records
-  which raw-note revision and transcript digest it used.
+- The user can edit and explicitly save raw notes, then regenerate. Existing
+  generated output records which raw-note revision and transcript digest it
+  used. In-place generated-brief editing is deliberately out of this MVP.
 - Markdown and JSON outputs remain available in the session folder.
 
 ## 5. MVP scope
 
 ### Included
 
-- Per-session timestamped raw notes with local atomic autosave.
+- Per-session timestamped raw notes with explicit, local atomic saves.
 - Native AppKit notes window that remains usable while recording.
 - Explicit post-transcript brief generation.
 - Fully local Hebrew/English/mixed-language model path.
@@ -125,6 +127,7 @@ Job to be done:
   action design and recovery plan.
 - Automatic post-meeting generation before latency, battery, and quality are
   measured and approved.
+- In-place editing of generated briefs or automatic/debounced raw-note saves.
 
 ## 6. Data contracts
 
@@ -286,9 +289,9 @@ and atomic final writes.
 
 - A user can type `# Decisions` and `- Dana: send proposal Friday` during a
   recording; quitting/reopening the Notes window preserves it.
-- Notes autosave without a measurable interruption to either audio track.
-- A crash may lose only the current unsaved debounce interval, targeted at no
-  more than 500 ms.
+- An explicit note save does not measurably interrupt either audio track.
+- A crash may lose the current unsaved editor draft; successfully saved raw
+  notes are written atomically.
 - Raw notes remain byte-identical through brief generation and regeneration.
 
 ### Brief quality and evidence

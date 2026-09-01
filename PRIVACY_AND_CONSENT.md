@@ -2,13 +2,12 @@
 
 ## Scope and status
 
-Quill is a local macOS meeting recorder and transcriber. This document covers
-the recorder/transcriber available today and the planned Local Meeting Notes
-and Meeting Briefs work described in
-[the product requirements](docs/PRD_LOCAL_MEETING_NOTES.md). Planned notes,
-brief-generation, and LM Studio controls are **not yet an integrated released
-UI**; their availability must be confirmed by the integration owner before
-they are relied on.
+Quill is a local macOS meeting recorder, transcriber, and Local Meeting Notes
+tool. The integrated Notes window, read-only Meeting Brief viewer, explicit
+brief generation, and LM Studio controls described in
+[the product requirements](docs/PRD_LOCAL_MEETING_NOTES.md) are available in
+this build. This MVP intentionally requires an explicit **Save** for raw-note
+edits and does not offer in-viewer editing of generated briefs.
 
 Quill is Mac-only. Capturing system audio requires macOS 15 or later. The
 local Hebrew MLX transcription path requires Apple silicon; the local English
@@ -38,10 +37,10 @@ FluidAudio/Core ML, and an optional local Hebrew CPU fallback when available.
 The optional Hebrew MLX setup separately downloads its runtime and model
 weights. That download is a setup boundary, not an upload of recording audio.
 
-## Upcoming local meeting notes and briefs
+## Local meeting notes and briefs
 
-When the planned feature is integrated, the session directory remains the
-boundary. It adds user-owned `raw-notes.json` and generated artifacts at
+The session directory remains the boundary. It contains user-owned
+`raw-notes.json` and generated artifacts at
 `artifacts/meeting-brief.json` and `artifacts/meeting-brief.md`.
 
 - Raw notes are separate from generated content and are never overwritten by
@@ -59,14 +58,14 @@ If raw notes change after generation, the existing brief is tied to its older
 raw-note revision. Regeneration is an explicit action using the new frozen
 revision; it never rewrites the raw notes.
 
-See [Local Meeting Notes](docs/LOCAL_MEETING_NOTES.md) for the proposed flow,
-artifact meanings, recovery, and the future local-model setup boundary.
+See [Local Meeting Notes](docs/LOCAL_MEETING_NOTES.md) for the shipped flow,
+artifact meanings, recovery, and the local-model setup boundary.
 
 ## Network, accounts, and model boundary
 
 Quill's built-in recording and transcription have no cloud fallback, accounts,
 telemetry, hidden retention service, or automatic sharing. Recordings,
-transcripts, and the planned notes/brief artifacts stay in the selected local
+transcripts, notes, and brief artifacts stay in the selected local
 recordings directory unless you copy, back up, upload, or process them with
 another tool yourself.
 
@@ -74,7 +73,7 @@ The existing `on_stop` setting can run a shell command selected by the user.
 That command is outside Quill's built-in privacy boundary and may have its own
 network or retention behavior; review it before configuring one.
 
-The planned optional summarization provider is a user-operated LM Studio
+The optional summarization provider is a user-operated LM Studio
 server at a literal loopback address only: `http://127.0.0.1` or `http://[::1]`.
 It is off by default. It does not permit remote hosts, proxies, redirects, or
 cloud fallback. Users should keep LM Studio LAN serving disabled. Quill will
@@ -93,7 +92,7 @@ Studio response.
 Before installing a model outside Quill, review its source, license, revision,
 size, storage location, and any checksum supplied by its distributor. Quill
 does not download or verify those weights. Once a model is already installed
-and LM Studio is serving only on loopback, Quill's proposed generation request
+and LM Studio is serving only on loopback, Quill's generation request
 does not require a cloud account or external network route.
 
 ## Retention, removal, and recovery

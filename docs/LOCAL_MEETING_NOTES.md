@@ -27,7 +27,7 @@ Apple silicon is required for the Hebrew MLX route, not for Hebrew as a
 language in general. See [Hebrew MLX setup](HEBREW_MLX_SETUP.md) for its
 one-time local runtime and model installation.
 
-## Proposed session contents
+## Session contents
 
 The session folder is the local lifecycle boundary:
 
@@ -51,7 +51,7 @@ generation must never overwrite it. The generated JSON captures source digests,
 the frozen raw-note revision, engine/model metadata, and evidence references.
 The Markdown artifact is a readable rendering of the generated brief.
 
-## Proposed workflow
+## Workflow
 
 1. Record and transcribe locally as usual.
 2. During the meeting, open **Meeting notes…** and write concise raw notes.
@@ -62,9 +62,11 @@ The Markdown artifact is a readable rendering of the generated brief.
 4. Quill supplies only the canonical transcript and a frozen raw-notes
    revision to the local summarization engine. It does not supply the raw
    audio tracks or `mixed.m4a` as summary input.
-5. Review and edit the result. Decisions, action items, topics, and questions
-   must refer to transcript segments or raw notes. Unknown owners and dates
-   should stay unknown rather than be invented.
+5. Review the read-only result. In this MVP, edit raw notes and regenerate to
+   create a new brief; the viewer does not edit generated sections in place.
+   Decisions, action items, topics, and questions must refer to transcript
+   segments or raw notes. Unknown owners and dates should stay unknown rather
+   than be invented.
 
 Generated output is a reviewable draft, not a substitute for the recording or
 transcript and not a guarantee that every statement is correct or complete.
@@ -75,7 +77,7 @@ rewrites raw notes or the canonical transcript.
 
 ## LM Studio option
 
-The first proposed local summarization provider is LM Studio, but it is opt-in
+The local summarization provider is LM Studio, but it is opt-in
 and disabled by default. Quill will accept only literal loopback endpoints:
 `http://127.0.0.1` and `http://[::1]`. It rejects remote hosts, proxies, and
 redirects. Keep LM Studio LAN serving disabled.
@@ -97,7 +99,7 @@ that requires a separate verified installation record.
 Because the model is installed outside Quill, review its distributor, license,
 revision, size, storage location, and any supplied checksum before using it.
 Quill does not download or verify those weights. After the user has installed
-the model and LM Studio serves it on loopback, the proposed generation request
+the model and LM Studio serves it on loopback, the generation request
 does not require a cloud account or external network route.
 
 ## Privacy, retention, and recovery

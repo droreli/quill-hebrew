@@ -127,12 +127,12 @@ canonical transcript and a frozen raw-note revision, keeps raw notes separate
 from generated content, and has no cloud fallback, accounts, telemetry, or
 automatic sharing.
 
-The proposed LM Studio provider is opt-in and literal-loopback only
+The LM Studio provider is opt-in and literal-loopback only
 (`127.0.0.1` or `::1`); Quill will never manage LM Studio or its models. The
 initial personal recommendation, `google/gemma-4-26b-a4b-qat`, is configurable
 and recorded with **reported**, not checksum-verified, runtime provenance.
 Read [Local Meeting Notes](docs/LOCAL_MEETING_NOTES.md) and
-[Privacy and consent](PRIVACY_AND_CONSENT.md) for the proposed flow, model
+[Privacy and consent](PRIVACY_AND_CONSENT.md) for the shipped flow, model
 boundary, retention, removal, recovery, and consent reminder.
 
 ## License and third-party components
