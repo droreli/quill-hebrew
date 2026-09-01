@@ -5,6 +5,7 @@ script_dir=${0:A:h}
 repo_root=${script_dir:h}
 app_parent=${QUILL_APP_PARENT:-"$HOME/Applications"}
 app_path="$app_parent/Quill.app"
+backup_dir=${QUILL_BACKUP_DIR:-"$app_parent/.quill-backups"}
 scratch_path=${QUILL_BUILD_PATH:-/tmp/quill-app-build}
 stage_root=$(mktemp -d "${TMPDIR:-/tmp}/quill-app.XXXXXX")
 stage_app="$stage_root/Quill.app"
@@ -48,9 +49,12 @@ done
 
 mkdir -p "$app_parent"
 if [[ -e "$app_path" ]]; then
-  backup_path="$app_parent/Quill.previous-$(date +%Y%m%d-%H%M%S).app"
-  mv "$app_path" "$backup_path"
-  echo "Previous app preserved at $backup_path"
+  mkdir -p "$backup_dir"
+  backup_path="$backup_dir/Quill-$(date +%Y%m%d-%H%M%S).zip"
+  /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app_path" "$backup_path"
+  /usr/bin/unzip -tq "$backup_path"
+  mv "$app_path" "$stage_root/PreviousQuill.app"
+  echo "Previous app archived at $backup_path"
 fi
 mv "$stage_app" "$app_path"
 
