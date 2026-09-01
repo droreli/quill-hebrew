@@ -95,8 +95,8 @@ final class ControlsWindowController: NSWindowController {
     }
 
     private func configureControls() {
-        language.addItems(withTitles: ["Automatic / mixed", "Hebrew", "English"])
-        engine.addItems(withTitles: ["Hebrew GPU (recommended)", "English local", "Hebrew CPU fallback"])
+        language.addItems(withTitles: ["Hebrew + English", "Hebrew only", "English only"])
+        engine.addItems(withTitles: ["Hebrew MLX — Apple GPU", "English Parakeet — local", "Hebrew CPU — fallback"])
         for control in [language, engine] {
             control.controlSize = .large
             control.target = self
@@ -161,11 +161,11 @@ final class ControlsWindowController: NSWindowController {
 
     private func recordingSetupCard() -> NSView {
         let selectors = horizontal([
-            selectorColumn("Language", "Choose how the next recording is decoded.", language),
-            selectorColumn("Transcription", "All engines run locally on this Mac.", engine, trailingDetail: engineDetail),
+            selectorColumn("Meeting language", "This selects the decoding language for the next recording.", language),
+            selectorColumn("Local model", "Choose the model that runs on this Mac.", engine, trailingDetail: engineDetail),
         ], spacing: 14, alignment: .top)
         selectors.distribution = .fillEqually
-        return card("waveform", "Recording setup", "Choose the language and local transcription engine before recording.", selectors, "Recording setup")
+        return card("waveform", "Recording setup", "For Hebrew + English, use the Hebrew MLX model. Use Parakeet for English-only meetings.", selectors, "Recording setup")
     }
 
     private func readingAndOutputCard() -> NSView {
@@ -176,7 +176,7 @@ final class ControlsWindowController: NSWindowController {
             separator(),
             preferenceRow("speaker.wave.2", "Save a listening copy", "Exports mixed.m4a; clean tracks remain the transcript source.", mixedAudio),
         ], spacing: 0)
-        return card("text.bubble", "Reading & output", "Keep the transcript as concise or detailed as you need.", rows, "Reading and output options")
+        return card("text.bubble", "Reading & output", "These choices are saved as your defaults for future recordings.", rows, "Reading and output options")
     }
 
     private func storageCard() -> NSView {
@@ -301,9 +301,9 @@ final class ControlsWindowController: NSWindowController {
 
     private func updateEngineDetail() {
         engineDetail.stringValue = switch options.engine {
-        case .hebrewMLX: "Whisper Large V3 Turbo · MLX · Apple Silicon"
-        case .parakeet: "Parakeet TDT 0.6B v2 · Core ML"
-        case .hebrewCPU: "Local Hebrew fallback · slower"
+        case .hebrewMLX: "Hebrew + mixed speech · Whisper Large V3 Turbo · Apple GPU"
+        case .parakeet: "English-only meetings · Parakeet TDT 0.6B v2 · Core ML"
+        case .hebrewCPU: "Hebrew fallback · local CPU · slower"
         }
     }
 

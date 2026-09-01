@@ -1,8 +1,7 @@
 import AppKit
 
 /// Status bar item in the top-right of the menu bar. Shows recording state at
-/// a glance and provides the only persistent control surface for the daemon
-/// (since we run as `.accessory` — no dock icon, no main window).
+/// a glance and provides the persistent control surface for the recorder.
 @MainActor
 final class MenuBarController {
     private let statusItem: NSStatusItem
@@ -17,7 +16,9 @@ final class MenuBarController {
     var onQuit: (() -> Void)?
 
     init() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // A fixed square avoids macOS collapsing a purely-image status item
+        // into an almost invisible sliver when the menu bar is crowded.
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -81,7 +82,10 @@ final class MenuBarController {
             let image = Self.featherImage(size: 16)
             image?.isTemplate = true
             button.image = image
-            button.imagePosition = .imageLeft
+            button.imagePosition = .imageOnly
+            button.imageScaling = .scaleProportionallyDown
+            button.toolTip = "Quill controls"
+            button.setAccessibilityLabel("Quill controls")
         }
     }
 
@@ -135,6 +139,40 @@ final class MenuBarController {
         else { return nil }
         // Menu-bar status icons are nominally 18pt tall; size the SVG to match.
         image.size = NSSize(width: size, height: size)
+        return image
+    }
+
+    /// A real Dock icon for the foreground app. Keep it code-generated so the
+    /// standalone executable does not rely on an app bundle or external asset.
+    static func appIcon(size: CGFloat) -> NSImage {
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+
+        let inset = size * 0.04
+        let tile = NSRect(x: inset, y: inset, width: size - inset * 2, height: size - inset * 2)
+        NSColor.controlAccentColor.setFill()
+        NSBezierPath(
+            roundedRect: tile,
+            xRadius: size * 0.23,
+            yRadius: size * 0.23
+        ).fill()
+
+        if let feather = featherImage(size: size * 0.58) {
+            feather.isTemplate = false
+            NSColor.white.set()
+            feather.draw(
+                in: NSRect(
+                    x: (size - feather.size.width) / 2,
+                    y: (size - feather.size.height) / 2,
+                    width: feather.size.width,
+                    height: feather.size.height
+                ),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1
+            )
+        }
+        image.unlockFocus()
         return image
     }
 

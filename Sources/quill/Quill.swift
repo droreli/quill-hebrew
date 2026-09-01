@@ -50,7 +50,10 @@ struct Run: ParsableCommand {
         }
 
         let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
+        // Quill remains a menu-bar recorder, but is a regular foreground app
+        // so it also has an unmistakable Dock icon while it is running.
+        app.setActivationPolicy(.regular)
+        app.applicationIconImage = MenuBarController.appIcon(size: 512)
 
         let output = exportMixedAudio
             ? Config.RecordingOutput.separateWithMixedExport
@@ -112,6 +115,13 @@ final class AppController {
         menuBar.update(recording: false, elapsed: nil)
         menuBar.setOutputMode(options.output)
         controls.onOptionsChanged = { [weak self] options in
+            do {
+                try Config.saveRecordingDefaults(options)
+            } catch {
+                FileHandle.standardError.write(Data(
+                    "warning: couldn't save Quill defaults: \(error)\n".utf8
+                ))
+            }
             self?.options = options
             self?.menuBar.setOutputMode(options.output)
         }

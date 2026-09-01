@@ -141,6 +141,10 @@ Optional, at `~/.config/quill/config.json`:
 }
 ```
 
+Changes made in **Open controls…** are saved here automatically. In
+particular, **Show speaker labels** and **Save a listening copy** stay enabled
+for future recordings after you turn them on.
+
 - `recordings_dir` — where sessions land. Resolution order: `--out` flag >
   config > `~/Recordings`.
 - `transcription.enabled` — set `false` to just record.

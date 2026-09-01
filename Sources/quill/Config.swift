@@ -128,6 +128,31 @@ enum Config {
         )
     }
 
+    /// Persist the choices made in the controls window. This deliberately
+    /// merges only the recording preferences, preserving local engine paths,
+    /// hooks, and any other user-managed configuration keys.
+    static func saveRecordingDefaults(_ options: RecordingOptions) throws {
+        var config = load() ?? [:]
+        var transcription = config["transcription"] as? [String: Any] ?? [:]
+
+        transcription["language"] = options.language.rawValue
+        transcription["engine"] = options.engine.rawValue
+        transcription["timestamps"] = options.showTimestamps
+        config["transcription"] = transcription
+        config["speaker_labels"] = options.showSpeakerLabels
+        config["export_mixed_audio"] = options.output == .separateWithMixedExport
+
+        try FileManager.default.createDirectory(
+            at: path.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(
+            withJSONObject: config,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        try data.write(to: path, options: .atomic)
+    }
+
     /// The proven Tamlil runtime lives here by default. Both the interpreter
     /// and model location can be overridden for another local macOS account;
     /// no value is ever sent to a service.
