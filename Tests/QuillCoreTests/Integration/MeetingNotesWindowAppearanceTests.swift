@@ -92,11 +92,12 @@ private func allDescendants(_ view: NSView) -> [NSView] {
 private func brightInkPixelCount(in view: NSView) -> Int {
     guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 0 }
     view.cacheDisplay(in: view.bounds, to: bitmap)
-    let width = Int(view.bounds.width)
-    let height = Int(view.bounds.height)
+    let width = bitmap.pixelsWide
+    let height = bitmap.pixelsHigh
+    let inset = Int((8 * CGFloat(bitmap.pixelsWide) / max(1, view.bounds.width)).rounded())
     var count = 0
-    for x in 8..<max(8, width - 8) {
-        for y in 8..<max(8, height - 8) {
+    for x in inset..<max(inset, width - inset) {
+        for y in inset..<max(inset, height - inset) {
             guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
             if color.alphaComponent > 0.8, color.brightnessComponent > 0.65 {
                 count += 1

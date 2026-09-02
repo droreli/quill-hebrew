@@ -58,7 +58,7 @@ import Testing
     viewModel.updateDraft("החלטנו להמשיך")
     viewModel.saveDraft()
 
-    #expect(command == .saveNote(sessionID: "session", noteID: nil, text: "החלטנו להמשיך"))
+    #expect(command == .saveNote(sessionID: "session", noteID: nil, text: "החלטנו להמשיך", capturedAtMS: nil))
     #expect(viewModel.draftText == "החלטנו להמשיך")
 
     let saved = RawMeetingNotes.Note(

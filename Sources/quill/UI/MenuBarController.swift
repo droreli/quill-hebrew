@@ -10,12 +10,15 @@ final class MenuBarController {
     private let transcriptionLabel: NSMenuItem
     private let toggleItem: NSMenuItem
     private let openBriefItem: NSMenuItem
+    private let briefHistoryItem: NSMenuItem
+    private let briefHistoryMenu = NSMenu()
 
     var onToggle: (() -> Void)?
     var onOpenControls: (() -> Void)?
     var onOpenFolder: (() -> Void)?
     var onOpenNotes: (() -> Void)?
     var onOpenBrief: (() -> Void)?
+    var onOpenBriefSession: ((URL) -> Void)?
     var onOpenProviderSetup: (() -> Void)?
     var onQuit: (() -> Void)?
 
@@ -83,6 +86,12 @@ final class MenuBarController {
         openBriefItem.image = Self.symbol("sparkles")
         menu.addItem(openBriefItem)
 
+        briefHistoryItem = NSMenuItem(title: "Meeting brief for recording", action: nil, keyEquivalent: "")
+        briefHistoryItem.image = Self.symbol("clock.arrow.circlepath")
+        briefHistoryItem.submenu = briefHistoryMenu
+        briefHistoryItem.isEnabled = false
+        menu.addItem(briefHistoryItem)
+
         let providerSetup = NSMenuItem(
             title: "Brief provider setup…",
             action: #selector(openProviderSetupClicked),
@@ -141,6 +150,33 @@ final class MenuBarController {
         openBriefItem.title = availability.buttonTitle
         openBriefItem.isEnabled = availability.canOpen
         openBriefItem.toolTip = availability.guidance
+        briefHistoryItem.isEnabled = availability.canOpen && briefHistoryMenu.items.contains(where: \.isEnabled)
+    }
+
+    /// Populate the persistent menu with every completed transcript rather
+    /// than silently binding Meeting Brief to whatever happened most recently.
+    func updateBriefSessions(_ directories: [URL], selected: URL?) {
+        briefHistoryMenu.removeAllItems()
+        guard !directories.isEmpty else {
+            let empty = NSMenuItem(title: "No completed transcripts", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            briefHistoryMenu.addItem(empty)
+            briefHistoryItem.isEnabled = false
+            return
+        }
+        for directory in directories {
+            let item = NSMenuItem(
+                title: directory.lastPathComponent,
+                action: #selector(openBriefSessionClicked(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = directory as NSURL
+            item.image = Self.symbol("doc.text")
+            item.toolTip = directory.path
+            item.state = directory.standardizedFileURL == selected?.standardizedFileURL ? .on : .off
+            briefHistoryMenu.addItem(item)
+        }
     }
 
     /// Make the active mode visible at the only persistent control surface.
@@ -222,6 +258,10 @@ final class MenuBarController {
     @objc private func openFolderClicked() { onOpenFolder?() }
     @objc private func openNotesClicked() { onOpenNotes?() }
     @objc private func openBriefClicked() { onOpenBrief?() }
+    @objc private func openBriefSessionClicked(_ sender: NSMenuItem) {
+        guard let directory = sender.representedObject as? NSURL else { return }
+        onOpenBriefSession?(directory as URL)
+    }
     @objc private func openProviderSetupClicked() { onOpenProviderSetup?() }
     @objc private func quitClicked() { onQuit?() }
 }

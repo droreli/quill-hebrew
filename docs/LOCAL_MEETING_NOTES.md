@@ -55,14 +55,25 @@ The Markdown artifact is a readable rendering of the generated brief.
 
 1. Record and transcribe locally as usual.
 2. During the meeting, open **Meeting notes…** and write concise raw notes.
-   Their timestamps are meeting-relative user cues, not AI output.
-3. After the canonical transcript is complete, choose **Generate meeting
-   brief** explicitly. There is no recording-time, automatic, or silent
-   generation.
-4. Quill supplies only the canonical transcript and a frozen raw-notes
+   Their timestamps are meeting-relative user cues, not AI output. A note is
+   stamped with the moment you started writing it, not the moment you saved.
+   The pad's status strip always states the honest phase: recording (the
+   transcript arrives after you stop), waiting for or running local
+   transcription, transcription failed or disabled, or transcript ready.
+   Quill does not transcribe live and the pad never pretends to.
+3. Once the transcript is ready, selecting a note in the timeline shows the
+   transcript lines spoken around that note's time. This is a deterministic
+   lookup in `transcript.json`, not a model call, and it never reads audio.
+4. After the canonical transcript is complete, choose **Enhance with AI
+   brief** in the pad or **Generate meeting brief** in the brief window
+   explicitly. If the local provider is not enabled, the pad offers provider
+   setup instead and says why. There is no recording-time, automatic, or
+   silent generation. See [Meeting Notes V2 plan](MEETING_NOTES_V2_PLAN.md)
+   for the lifecycle, boundaries, and deferred items.
+5. Quill supplies only the canonical transcript and a frozen raw-notes
    revision to the local summarization engine. It does not supply the raw
    audio tracks or `mixed.m4a` as summary input.
-5. Review the read-only result. In this MVP, edit raw notes and regenerate to
+6. Review the read-only result. In this MVP, edit raw notes and regenerate to
    create a new brief; the viewer does not edit generated sections in place.
    Decisions, action items, topics, and questions must refer to transcript
    segments or raw notes. Unknown owners and dates should stay unknown rather

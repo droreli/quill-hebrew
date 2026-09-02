@@ -244,8 +244,11 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let briefViewModel = MeetingBriefViewModel()
     private var noteStore: SessionNoteStore?
     private var noteSessionID: String?
+    private var noteSessionDirectory: URL?
     private var noteSessionStartedAt: Date?
     private var noteSessionEndedAt: Date?
+    private var lastTranscriptionStatus: TranscriptionCoordinator.Status = .idle
+    private var padStatusGeneration = 0
     /// One coordinator lives for the entire application process.  In
     /// particular, reopening the brief window, retrying, or resuming a durable
     /// job never replaces an in-flight queue with a new coordinator.
@@ -270,6 +273,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         menuBar.onOpenFolder = { [weak self] in self?.openFolder() }
         menuBar.onOpenNotes = { [weak self] in self?.openNotes() }
         menuBar.onOpenBrief = { [weak self] in self?.openBrief() }
+        menuBar.onOpenBriefSession = { [weak self] directory in self?.openBrief(for: directory) }
         menuBar.onOpenProviderSetup = { [weak self] in self?.providerSetup.show() }
         menuBar.onQuit = { [weak self] in self?.shutdown() }
         menuBar.update(recording: false, elapsed: nil)
@@ -298,6 +302,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         notesWindow.viewModel.onCommand = { [weak self] command in
             self?.handleNotes(command)
         }
+        notesWindow.onEnhance = { [weak self] action in self?.handlePadEnhancement(action) }
         briefWindow.onRegenerate = { [weak self] in self?.generateBrief() }
         briefWindow.onCancel = { [weak self] in self?.cancelBrief() }
         briefWindow.onReveal = { [weak self] in self?.revealBriefSession() }
@@ -405,6 +410,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func showTranscription(_ status: TranscriptionCoordinator.Status) {
+        lastTranscriptionStatus = status
         switch status {
         case .idle:
             menuBar.updateTranscription(nil)
@@ -446,6 +452,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         // for this one, and makes the waiting state explicit in the UI.
         noteStore = nil
         noteSessionID = nil
+        noteSessionDirectory = nil
         noteSessionStartedAt = nil
         noteSessionEndedAt = nil
         notesWindow.viewModel.unbind()
@@ -453,9 +460,11 @@ final class AppController: NSObject, NSApplicationDelegate {
             let store = try SessionNoteStore(sessionDirectory: directory, sessionID: identity)
             noteStore = store
             noteSessionID = identity
+            noteSessionDirectory = directory
             noteSessionStartedAt = startedAt
             noteSessionEndedAt = nil
-            notesWindow.viewModel.bind(sessionID: identity)
+            notesWindow.viewModel.bind(sessionID: identity, clock: meetingClock())
+            refreshMeetingPadStatus()
             Task { [weak self] in
                 let snapshot = await store.snapshot()
                 await MainActor.run {
@@ -484,6 +493,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         guard noteStore == nil || noteSessionID == nil || session?.dir != directory else { return }
         noteStore = nil
         noteSessionID = nil
+        noteSessionDirectory = nil
         noteSessionStartedAt = nil
         noteSessionEndedAt = nil
         notesWindow.viewModel.unbind()
@@ -494,12 +504,15 @@ final class AppController: NSObject, NSApplicationDelegate {
                 await MainActor.run {
                     guard self?.session == nil else { return }
                     self?.latestSession = directory
-                    self?.noteStore = store
-                    self?.noteSessionID = snapshot.sessionID
+                    guard let self else { return }
+                    self.noteStore = store
+                    self.noteSessionID = snapshot.sessionID
+                    self.noteSessionDirectory = directory
                     let timing = Self.sessionTiming(in: directory)
-                    self?.noteSessionStartedAt = timing?.started
-                    self?.noteSessionEndedAt = timing?.ended
-                    self?.notesWindow.viewModel.bind(sessionID: snapshot.sessionID, snapshot: snapshot)
+                    self.noteSessionStartedAt = timing?.started
+                    self.noteSessionEndedAt = timing?.ended
+                    self.notesWindow.viewModel.bind(sessionID: snapshot.sessionID, snapshot: snapshot, clock: self.meetingClock())
+                    self.refreshMeetingPadStatus()
                 }
             } catch {
                 await MainActor.run {
@@ -512,7 +525,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func handleNotes(_ command: MeetingNotesCommand) {
         guard let store = noteStore, let sessionID = noteSessionID else { return }
         let commandSessionID: String = switch command {
-        case let .selectTemplate(id, _), let .saveNote(id, _, _), let .deleteNote(id, _), let .requestTimestampMarker(id): id
+        case let .selectTemplate(id, _), let .saveNote(id, _, _, _), let .deleteNote(id, _), let .requestTimestampMarker(id): id
         }
         guard commandSessionID == sessionID else { return }
         let capturedAtMS = meetingRelativeMilliseconds()
@@ -524,11 +537,11 @@ final class AppController: NSObject, NSApplicationDelegate {
                 case let .selectTemplate(_, template):
                     try await store.setTemplate(template)
                     snapshot = await store.snapshot()
-                case let .saveNote(_, noteID, text):
+                case let .saveNote(_, noteID, text, draftCapturedAtMS):
                     if let noteID {
                         try await store.update(id: noteID, text: text)
                     } else {
-                        try await store.add(text: text, capturedAtMS: capturedAtMS)
+                        try await store.add(text: text, capturedAtMS: draftCapturedAtMS ?? capturedAtMS)
                     }
                     snapshot = await store.snapshot()
                 case let .deleteNote(_, noteID):
@@ -555,12 +568,103 @@ final class AppController: NSObject, NSApplicationDelegate {
         "[\(Self.format(TimeInterval(meetingRelativeMilliseconds()) / 1_000))]"
     }
 
-    private func openBrief() {
+    private func meetingClock() -> () -> Int {
+        { [weak self] in self?.meetingRelativeMilliseconds() ?? 0 }
+    }
+
+    /// Resolve the pad from durable local facts only. The canonical transcript
+    /// is decoded off the main actor; neither this flow nor the pad reads audio.
+    private func refreshMeetingPadStatus() {
+        guard let directory = noteSessionDirectory,
+              let sessionID = noteSessionID,
+              notesWindow.viewModel.isBound
+        else {
+            notesWindow.viewModel.setStatus(.unbound)
+            return
+        }
+        padStatusGeneration += 1
+        let generation = padStatusGeneration
+        let fileManager = FileManager.default
+        let transcriptURL = directory.appendingPathComponent("transcript.json")
+        let transcriptExists = fileManager.fileExists(atPath: transcriptURL.path)
+        var facts = MeetingPadStatus.Facts(
+            sessionName: directory.lastPathComponent,
+            isRecording: session?.dir == directory,
+            startedAt: noteSessionStartedAt,
+            hasCompletedMeta: fileManager.fileExists(atPath: directory.appendingPathComponent("meta.json").path),
+            transcriptSegmentCount: nil,
+            transcriptionActivity: Self.padActivity(lastTranscriptionStatus),
+            transcriptionEnabled: Config.transcriptionEnabled(),
+            providerEnabled: Config.lmStudioProvider().isEnabled,
+            briefExists: fileManager.fileExists(atPath: MeetingBriefStore(sessionDirectory: directory).briefURL.path)
+        )
+        guard transcriptExists else {
+            notesWindow.viewModel.acceptTranscript(nil, sessionID: sessionID)
+            notesWindow.viewModel.setStatus(.resolve(facts))
+            return
+        }
+        if let cached = notesWindow.viewModel.transcript {
+            facts.transcriptSegmentCount = cached.segments.count
+            notesWindow.viewModel.setStatus(.resolve(facts))
+            return
+        }
+        notesWindow.viewModel.setStatus(.resolve(facts))
+        Task { [weak self] in
+            let transcript = await Self.loadTranscript(at: transcriptURL)
+            guard let self, self.padStatusGeneration == generation, self.noteSessionDirectory == directory else { return }
+            guard let transcript else {
+                facts.transcriptSegmentCount = nil
+                facts.transcriptionActivity = .failed(session: directory.lastPathComponent)
+                self.notesWindow.viewModel.setStatus(.resolve(facts))
+                return
+            }
+            facts.transcriptSegmentCount = transcript.segments.count
+            self.notesWindow.viewModel.acceptTranscript(transcript, sessionID: sessionID)
+            self.notesWindow.viewModel.setStatus(.resolve(facts))
+        }
+    }
+
+    nonisolated private static func loadTranscript(at url: URL) async -> SessionTranscript? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(SessionTranscript.self, from: data)
+    }
+
+    private static func padActivity(_ status: TranscriptionCoordinator.Status) -> MeetingPadStatus.TranscriptionActivity {
+        switch status {
+        case .idle: .idle
+        case let .transcribing(session, queued): .transcribing(session: session, queued: queued)
+        case let .failed(session): .failed(session: session)
+        }
+    }
+
+    private func handlePadEnhancement(_ action: MeetingEnhancementAvailability.Action) {
+        switch action {
+        case .none:
+            refreshMeetingPadStatus()
+        case .openProviderSetup:
+            providerSetup.show()
+        case .generateBrief:
+            guard session == nil, let directory = noteSessionDirectory else {
+                refreshMeetingPadStatus()
+                return
+            }
+            latestSession = directory
+            refreshBriefPresentation(for: directory)
+            briefWindow.show()
+            generateBrief()
+        case .openBrief:
+            guard let directory = noteSessionDirectory else { return }
+            latestSession = directory
+            openBrief(for: directory)
+        }
+    }
+
+    private func openBrief(for requestedDirectory: URL? = nil) {
         guard session == nil else {
             refreshMeetingIntelligenceAvailability()
             return
         }
-        guard let directory = latestSession ?? Self.latestCompletedSession(in: root) else {
+        guard let directory = requestedDirectory ?? latestSession ?? Self.latestCompletedSession(in: root) else {
             briefViewModel.update(state: .missing, rawNotes: nil, sessionDirectory: nil)
             briefWindow.show()
             return
@@ -571,7 +675,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             refreshMeetingIntelligenceAvailability()
             return
         }
-        latestSession = directory
+        if requestedDirectory == nil { latestSession = directory }
         refreshBriefPresentation(for: directory)
         briefWindow.show()
     }
@@ -581,7 +685,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             briefViewModel.updateState(.failed(message: "Stop recording and wait for transcription before generating an AI brief."))
             return
         }
-        guard let directory = latestSession ?? Self.latestCompletedSession(in: root) else {
+        guard let directory = briefViewModel.sessionDirectory ?? latestSession ?? Self.latestCompletedSession(in: root) else {
             briefViewModel.updateState(.failed(message: "Choose a completed transcript first."))
             return
         }
@@ -621,6 +725,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             briefViewModel.updateState(.processing(message: queued > 0 ? "Generating locally; \(queued) waiting." : "Generating from transcript and notes only."))
         case let .ready(_, stale):
             if let directory { refreshBriefPresentation(for: directory, coordinatorReportedStale: stale) }
+            refreshMeetingPadStatus()
         case let .failed(_, message):
             briefViewModel.updateState(.failed(message: message))
         case .cancelled:
@@ -649,6 +754,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             try Config.saveLMStudioProvider(provider)
             Task { [briefEngine] in await briefEngine.reconfigure(provider: provider) }
             providerSetup.update(readiness: provider.isEnabled ? .unavailable(.providerUnavailable("Saved. Check availability when LM Studio is running locally.")) : .disabled)
+            refreshMeetingPadStatus()
         } catch {
             providerSetup.update(readiness: .unavailable(.invalidConfiguration("Could not save local provider settings: \(error)")))
         }
@@ -676,8 +782,13 @@ final class AppController: NSObject, NSApplicationDelegate {
             isRecording: session != nil,
             transcriptReady: transcriptReady
         )
+        menuBar.updateBriefSessions(
+            CompletedTranscriptSessions.directories(in: root),
+            selected: briefViewModel.sessionDirectory
+        )
         menuBar.updateBriefAvailability(availability)
         controls.updateMeetingIntelligence(isRecording: session != nil, session: directory)
+        refreshMeetingPadStatus()
     }
 
     private static func latestCompletedSession(in root: URL) -> URL? {
@@ -722,6 +833,11 @@ final class AppController: NSObject, NSApplicationDelegate {
             }
             await MainActor.run {
                 self?.briefViewModel.update(state: state, rawNotes: rawNotes, sessionDirectory: directory)
+                guard let self else { return }
+                self.menuBar.updateBriefSessions(
+                    CompletedTranscriptSessions.directories(in: self.root),
+                    selected: directory
+                )
             }
         }
     }

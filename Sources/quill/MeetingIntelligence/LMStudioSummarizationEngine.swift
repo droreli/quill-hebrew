@@ -57,8 +57,19 @@ struct LMStudioSummarizationEngine: SummarizationEngine, Sendable {
       try responseDecoder.validateEvidenceIDs(payload, against: transcript)
       partials.append(promptBuilder.namespaced(payload, namespace: "c\(chunk.index + 1)"))
     }
-    let finalPayload = try await reduceHierarchically(
-      partials, transcript: transcript, rawNotes: rawNotes)
+    // A single extraction is already a complete bounded brief. Sending it
+    // through a second model reduction is both wasteful and, when the
+    // extraction contains no evidence-backed items, used to produce an
+    // impossible schema (`enum: []` together with `minItems: 1`).
+    let finalPayload: BriefResponseDecoder.ModelBriefPayload
+    if partials.count == 1, let only = partials.first {
+      finalPayload = promptBuilder.namespaced(only, namespace: "final")
+    } else if partials.allSatisfy({ $0.hasNoEvidenceBackedItems }) {
+      finalPayload = consolidateEmptyPartials(partials)
+    } else {
+      finalPayload = try await reduceHierarchically(
+        partials, transcript: transcript, rawNotes: rawNotes)
+    }
     try Task.checkCancellation()
     return try responseDecoder.makeMeetingBrief(
       payload: finalPayload,
@@ -111,5 +122,36 @@ struct LMStudioSummarizationEngine: SummarizationEngine, Sendable {
     encoder.outputFormatting = [.sortedKeys]
     let digest = SHA256.hash(data: try encoder.encode(rawNotes))
     return digest.map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Preserve model-produced coverage text without asking the model to reduce
+  /// a collection that contains no citable items. The final brief still shows
+  /// the raw notes separately and carries Quill's mandatory review warning.
+  private func consolidateEmptyPartials(
+    _ partials: [BriefResponseDecoder.ModelBriefPayload]
+  ) -> BriefResponseDecoder.ModelBriefPayload {
+    let overviews = partials.map(\.overview)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    let uniqueOverviews = overviews.reduce(into: [String]()) { result, overview in
+      if !result.contains(overview) { result.append(overview) }
+    }
+    let language = partials.lazy.map(\.language)
+      .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? "undetermined"
+    return .init(
+      language: language,
+      overview: uniqueOverviews.joined(separator: "\n\n"),
+      topics: [],
+      decisions: [],
+      actionItems: [],
+      openQuestions: [],
+      warnings: []
+    )
+  }
+}
+
+private extension BriefResponseDecoder.ModelBriefPayload {
+  var hasNoEvidenceBackedItems: Bool {
+    topics.isEmpty && decisions.isEmpty && actionItems.isEmpty && openQuestions.isEmpty
   }
 }

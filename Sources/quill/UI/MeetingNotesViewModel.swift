@@ -1,11 +1,11 @@
 import Foundation
 
 /// The small command surface the recording/session layer needs from the notes
-/// UI. The UI never writes `raw-notes.json`, reads the clock, or talks to audio
-/// capture; it simply reports intent and renders the next supplied snapshot.
+/// UI. The UI never writes `raw-notes.json`, reads the wall clock, or talks to
+/// audio capture; it reports intent and renders the next supplied snapshot.
 enum MeetingNotesCommand: Sendable, Equatable {
     case selectTemplate(sessionID: String, template: String)
-    case saveNote(sessionID: String, noteID: String?, text: String)
+    case saveNote(sessionID: String, noteID: String?, text: String, capturedAtMS: Int?)
     case deleteNote(sessionID: String, noteID: String)
     case requestTimestampMarker(sessionID: String)
 }
@@ -70,7 +70,11 @@ final class MeetingNotesViewModel {
     private(set) var selectedNoteID: String?
     private(set) var draftText = ""
     private(set) var selectedTemplate: MeetingNoteTemplate = .general
+    private(set) var status: MeetingPadStatus = .unbound
+    private(set) var transcript: SessionTranscript?
+    private(set) var draftCapturedAtMS: Int?
     private var clearDraftAfterSave = false
+    private var meetingClock: (() -> Int)?
 
     /// Set by the coordinator. It should enqueue the command off the UI path
     /// and later call `accept(snapshot:)` or `setSaveState(_:)` on this model.
@@ -80,12 +84,24 @@ final class MeetingNotesViewModel {
     var notes: [RawMeetingNotes.Note] { snapshot?.notes ?? [] }
     var isBound: Bool { sessionID != nil }
     var hasSelectedNote: Bool { selectedNoteID != nil }
+    var selectedNote: RawMeetingNotes.Note? {
+        guard let selectedNoteID else { return nil }
+        return notes.first { $0.id == selectedNoteID }
+    }
 
-    func bind(sessionID: String, snapshot: RawMeetingNotes? = nil) {
+    var selectedNoteContext: MeetingNoteContext? {
+        guard let note = selectedNote, let transcript, !transcript.segments.isEmpty else { return nil }
+        return MeetingNoteContext.around(capturedAtMS: note.capturedAtMS, in: transcript)
+    }
+
+    func bind(sessionID: String, snapshot: RawMeetingNotes? = nil, clock: (() -> Int)? = nil) {
         self.sessionID = sessionID
+        meetingClock = clock
         selectedNoteID = nil
         draftText = ""
+        draftCapturedAtMS = nil
         clearDraftAfterSave = false
+        transcript = nil
         saveState = .saved(updatedAt: nil)
         if let snapshot {
             accept(snapshot: snapshot)
@@ -100,12 +116,16 @@ final class MeetingNotesViewModel {
     /// only after the active recording/session has actually ended.
     func unbind() {
         sessionID = nil
+        meetingClock = nil
         snapshot = nil
         selectedNoteID = nil
         draftText = ""
+        draftCapturedAtMS = nil
         clearDraftAfterSave = false
         selectedTemplate = .general
         saveState = .unbound
+        status = .unbound
+        transcript = nil
         notifyChanged()
     }
 
@@ -123,11 +143,35 @@ final class MeetingNotesViewModel {
             clearDraftAfterSave = false
             selectedNoteID = nil
             draftText = ""
+            draftCapturedAtMS = nil
         } else if let selectedNoteID,
            !snapshot.notes.contains(where: { $0.id == selectedNoteID }) {
             self.selectedNoteID = nil
             draftText = ""
+            draftCapturedAtMS = nil
         }
+        notifyChanged()
+        return true
+    }
+
+    func setStatus(_ status: MeetingPadStatus) {
+        guard isBound else {
+            if self.status != .unbound {
+                self.status = .unbound
+                notifyChanged()
+            }
+            return
+        }
+        guard self.status != status else { return }
+        self.status = status
+        notifyChanged()
+    }
+
+    @discardableResult
+    func acceptTranscript(_ transcript: SessionTranscript?, sessionID: String) -> Bool {
+        guard sessionID == self.sessionID else { return false }
+        guard self.transcript != transcript else { return true }
+        self.transcript = transcript
         notifyChanged()
         return true
     }
@@ -150,6 +194,7 @@ final class MeetingNotesViewModel {
         if draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            selectedNoteID == nil {
             draftText = template.starterText
+            draftCapturedAtMS = nil
         }
         saveState = .waitingForSave
         onCommand?(.selectTemplate(sessionID: sessionID, template: template.rawValue))
@@ -158,18 +203,26 @@ final class MeetingNotesViewModel {
 
     func updateDraft(_ text: String) {
         draftText = text
+        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if !hasContent {
+            if selectedNoteID == nil { draftCapturedAtMS = nil }
+        } else if selectedNoteID == nil, draftCapturedAtMS == nil, let meetingClock {
+            draftCapturedAtMS = max(0, meetingClock())
+        }
     }
 
     func selectNote(id: String) {
         guard let note = notes.first(where: { $0.id == id }) else { return }
         selectedNoteID = note.id
         draftText = note.text
+        draftCapturedAtMS = nil
         notifyChanged()
     }
 
     func startNewNote() {
         selectedNoteID = nil
         draftText = ""
+        draftCapturedAtMS = nil
         notifyChanged()
     }
 
@@ -183,7 +236,8 @@ final class MeetingNotesViewModel {
         }
         saveState = .waitingForSave
         clearDraftAfterSave = true
-        onCommand?(.saveNote(sessionID: sessionID, noteID: selectedNoteID, text: text))
+        let capturedAtMS = selectedNoteID == nil ? draftCapturedAtMS : nil
+        onCommand?(.saveNote(sessionID: sessionID, noteID: selectedNoteID, text: text, capturedAtMS: capturedAtMS))
         notifyChanged()
     }
 
@@ -205,6 +259,9 @@ final class MeetingNotesViewModel {
         guard !marker.isEmpty else { return }
         let separator = draftText.isEmpty || draftText.hasSuffix("\n") ? "" : "\n"
         draftText += "\(separator)\(marker) "
+        if selectedNoteID == nil, draftCapturedAtMS == nil, let meetingClock {
+            draftCapturedAtMS = max(0, meetingClock())
+        }
         notifyChanged()
     }
 

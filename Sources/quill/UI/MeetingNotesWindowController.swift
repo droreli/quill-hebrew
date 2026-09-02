@@ -1,11 +1,13 @@
 import AppKit
 
-/// A keyboard-first, local-only notes surface. It has no recording controls or
-/// persistence dependency: callers bind a `MeetingNotesViewModel` and handle
-/// its commands in their own session/persistence layer.
+/// A keyboard-first, local-only meeting pad. It has no recording controls or
+/// persistence dependency: callers bind a `MeetingNotesViewModel`, feed it
+/// lifecycle facts, and handle its commands in their own session layer.
 @MainActor
 final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate, NSTableViewDataSource, NSTableViewDelegate {
     let viewModel: MeetingNotesViewModel
+
+    var onEnhance: ((MeetingEnhancementAvailability.Action) -> Void)?
 
     private let templateSelector = NSPopUpButton(frame: .zero, pullsDown: false)
     private let editor: NSTextView
@@ -18,7 +20,19 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
     private let saveButton = NSButton(title: "Add note", target: nil, action: nil)
     private let newNoteButton = NSButton(title: "New", target: nil, action: nil)
     private let deleteButton = NSButton(title: "Delete", target: nil, action: nil)
-    private let markerButton = NSButton(title: "Add time marker", target: nil, action: nil)
+    private let markerButton = NSButton(title: "Time marker", target: nil, action: nil)
+    private let enhanceButton = NSButton(title: "", target: nil, action: nil)
+    private let enhanceGuidance = NSTextField(wrappingLabelWithString: "")
+
+    private let lifecycleDot = NSView()
+    private let lifecycleHeadline = NSTextField(labelWithString: "")
+    private let lifecycleDetail = NSTextField(wrappingLabelWithString: "")
+    private var lifecycleCard: NSView!
+    private var elapsedTimer: Timer?
+
+    private var contextCard: NSView!
+    private let contextTitle = NSTextField(labelWithString: "")
+    private let contextLines = NSStackView()
     private var isApplyingModel = false
 
     convenience init() {
@@ -31,8 +45,8 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         self.editor = editorSurface.editor
         self.editorScrollView = editorSurface.scrollView
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 780, height: 640),
-            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -40,7 +54,7 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
-        window.minSize = NSSize(width: 620, height: 480)
+        window.minSize = NSSize(width: 480, height: 520)
         window.isReleasedWhenClosed = false
         let autosaveName = "QuillMeetingNotesWindow"
         if !window.setFrameUsingName(autosaveName) { window.center() }
@@ -70,30 +84,36 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
 
         configureControls()
         let header = buildHeader()
-        let body = buildBody()
+        lifecycleCard = buildLifecycleCard()
+        let capture = buildCapture()
+        let timeline = buildTimeline()
+        contextCard = buildContextCard()
         let footer = buildFooter()
-        let stack = NSStackView(views: [header, body, footer])
+        let stack = NSStackView(views: [header, lifecycleCard, capture, timeline, contextCard, footer])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 14
+        stack.spacing = 10
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 44),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
-            header.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            body.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            footer.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 40),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
         ])
-        body.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+        for view in [header, lifecycleCard!, capture, timeline, contextCard!, footer] {
+            view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        editorScrollView.setContentHuggingPriority(.init(1), for: .vertical)
+        noteListContainer.setContentHuggingPriority(.defaultHigh, for: .vertical)
     }
 
     private func configureControls() {
         templateSelector.addItems(withTitles: MeetingNoteTemplate.allCases.map(\.title))
         templateSelector.target = self
         templateSelector.action = #selector(templateChanged)
+        templateSelector.controlSize = .small
+        templateSelector.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         templateSelector.setAccessibilityLabel("Meeting note template")
         templateSelector.setAccessibilityHelp("Choose a starting structure for a new note.")
 
@@ -124,9 +144,9 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
             noteListEmptyState.trailingAnchor.constraint(equalTo: noteListContainer.trailingAnchor, constant: -16),
             noteListEmptyState.centerYAnchor.constraint(equalTo: noteListContainer.centerYAnchor),
         ])
-        noteListScrollView.setAccessibilityLabel("Saved meeting notes")
+        noteListScrollView.setAccessibilityLabel("Saved meeting notes timeline")
 
-        for button in [saveButton, newNoteButton, deleteButton, markerButton] {
+        for button in [saveButton, newNoteButton, deleteButton, markerButton, enhanceButton] {
             button.target = self
             button.bezelStyle = .rounded
             button.imagePosition = .imageLeading
@@ -138,22 +158,66 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         saveButton.setAccessibilityLabel("Save note")
 
         newNoteButton.action = #selector(newNote)
+        newNoteButton.title = ""
         newNoteButton.image = symbol("square.and.pencil", size: 13)
+        newNoteButton.imagePosition = .imageOnly
+        newNoteButton.toolTip = "New note"
         newNoteButton.setAccessibilityLabel("Start a new note")
 
         deleteButton.action = #selector(deleteSelectedNote)
+        deleteButton.title = ""
         deleteButton.image = symbol("trash", size: 13)
+        deleteButton.imagePosition = .imageOnly
+        deleteButton.toolTip = "Delete selected note"
         deleteButton.setAccessibilityLabel("Delete selected note")
 
         markerButton.action = #selector(addTimestampMarker)
+        markerButton.keyEquivalent = "t"
+        markerButton.keyEquivalentModifierMask = [.command, .shift]
         markerButton.image = symbol("clock.badge.plus", size: 13)
         markerButton.setAccessibilityLabel("Add meeting time marker")
-        markerButton.setAccessibilityHelp("Requests a meeting-relative timestamp from Quill and inserts it into the draft.")
+        markerButton.setAccessibilityHelp("Inserts the current meeting-relative time into the draft. Command Shift T.")
+
+        enhanceButton.action = #selector(enhance)
+        enhanceButton.keyEquivalent = "e"
+        enhanceButton.keyEquivalentModifierMask = [.command, .shift]
+        enhanceButton.controlSize = .large
+        enhanceButton.setAccessibilityIdentifier("meetingNotes.enhance")
+
+        enhanceGuidance.font = .systemFont(ofSize: 11)
+        enhanceGuidance.textColor = .secondaryLabelColor
+        enhanceGuidance.alignment = .natural
+        enhanceGuidance.maximumNumberOfLines = 2
+        enhanceGuidance.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        enhanceGuidance.setAccessibilityLabel("AI brief availability")
 
         statusLabel.font = .systemFont(ofSize: 11, weight: .medium)
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.alignment = .natural
         statusLabel.setAccessibilityLabel("Notes save status")
+
+        lifecycleDot.wantsLayer = true
+        lifecycleDot.layer?.cornerRadius = 5
+        lifecycleDot.widthAnchor.constraint(equalToConstant: 10).isActive = true
+        lifecycleDot.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        lifecycleDot.setAccessibilityElement(false)
+        lifecycleHeadline.font = .systemFont(ofSize: 13, weight: .semibold)
+        lifecycleHeadline.textColor = .labelColor
+        lifecycleHeadline.lineBreakMode = .byTruncatingTail
+        lifecycleHeadline.alignment = .natural
+        lifecycleHeadline.setAccessibilityIdentifier("meetingNotes.lifecycleHeadline")
+        lifecycleDetail.font = .systemFont(ofSize: 11)
+        lifecycleDetail.textColor = .secondaryLabelColor
+        lifecycleDetail.alignment = .natural
+        lifecycleDetail.maximumNumberOfLines = 2
+        lifecycleDetail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        contextTitle.font = .systemFont(ofSize: 12, weight: .semibold)
+        contextTitle.textColor = .labelColor
+        contextTitle.alignment = .natural
+        contextLines.orientation = .vertical
+        contextLines.alignment = .leading
+        contextLines.spacing = 4
     }
 
     /// Use AppKit's native scrollable text-view pair so the document view
@@ -215,8 +279,8 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         noteTable.headerView = nil
         noteTable.delegate = self
         noteTable.dataSource = self
-        noteTable.rowHeight = 72
-        noteTable.intercellSpacing = NSSize(width: 0, height: 6)
+        noteTable.rowHeight = 52
+        noteTable.intercellSpacing = NSSize(width: 0, height: 4)
         noteTable.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         noteTable.selectionHighlightStyle = .regular
         noteTable.usesAlternatingRowBackgroundColors = false
@@ -232,44 +296,81 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
     }
 
     private func buildHeader() -> NSView {
-        let icon = NSImageView(image: symbol("note.text", size: 18)!)
+        let icon = NSImageView(image: symbol("note.text", size: 16)!)
         icon.contentTintColor = .controlAccentColor
-        let title = label("Meeting notes", size: 22, weight: .semibold)
-        let subtitle = label("Private notes for this meeting", size: 12, weight: .medium, color: .secondaryLabelColor)
-        let copy = stack([title, subtitle], orientation: .vertical, spacing: 1)
-        let templateLabel = label("Template", size: 11, weight: .semibold, color: .secondaryLabelColor)
-        let picker = stack([templateLabel, templateSelector], orientation: .vertical, spacing: 4)
+        let title = label("Meeting notes", size: 18, weight: .semibold)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        return stack([icon, copy, spacer, picker], orientation: .horizontal, spacing: 9, alignment: .centerY)
+        let header = stack([icon, title, spacer, templateSelector], orientation: .horizontal, spacing: 8, alignment: .centerY)
+        header.setAccessibilityLabel("Meeting notes header")
+        return header
     }
 
-    private func buildBody() -> NSView {
-        let editorTitle = label("Capture a thought", size: 13, weight: .semibold)
-        let editorHint = label("⌘↩ saves · headings and bullets work well", size: 11, weight: .regular, color: .tertiaryLabelColor)
+    private func buildLifecycleCard() -> NSView {
+        let headlineRow = stack([lifecycleDot, lifecycleHeadline], orientation: .horizontal, spacing: 7, alignment: .centerY)
+        let body = stack([headlineRow, lifecycleDetail], orientation: .vertical, spacing: 2)
+        let card = PadCardView(content: body, insets: NSEdgeInsets(top: 9, left: 12, bottom: 9, right: 12))
+        card.setAccessibilityRole(.group)
+        card.setAccessibilityLabel("Meeting status")
+        return card
+    }
+
+    private func buildCapture() -> NSView {
+        let editorTitle = label("Capture", size: 12, weight: .semibold)
+        let editorHint = label("⌘↩ saves · stamped when you start writing", size: 11, weight: .regular, color: .tertiaryLabelColor)
+        editorHint.lineBreakMode = .byTruncatingTail
         let editorHeader = stack([editorTitle, editorHint], orientation: .horizontal, spacing: 8, alignment: .centerY)
-        let editorColumn = stack([editorHeader, editorScrollView], orientation: .vertical, spacing: 7)
-        let listTitle = label("Saved notes", size: 13, weight: .semibold)
-        let listColumn = stack([listTitle, noteListContainer], orientation: .vertical, spacing: 7)
-        let result = stack([editorColumn, listColumn], orientation: .horizontal, spacing: 16, alignment: .top)
-        result.distribution = .fillEqually
-        editorScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
-        noteListContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
-        return result
+        let column = stack([editorHeader, editorScrollView], orientation: .vertical, spacing: 5)
+        editorScrollView.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        editorScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 110).isActive = true
+        return column
+    }
+
+    private func buildTimeline() -> NSView {
+        let listTitle = label("Timeline", size: 12, weight: .semibold)
+        let column = stack([listTitle, noteListContainer], orientation: .vertical, spacing: 5)
+        noteListContainer.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        noteListContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 96).isActive = true
+        noteListContainer.heightAnchor.constraint(lessThanOrEqualToConstant: 220).isActive = true
+        return column
+    }
+
+    private func buildContextCard() -> NSView {
+        let icon = NSImageView(image: symbol("text.quote", size: 11)!)
+        icon.contentTintColor = .controlAccentColor
+        icon.setAccessibilityElement(false)
+        let titleRow = stack([icon, contextTitle], orientation: .horizontal, spacing: 6, alignment: .centerY)
+        let body = stack([titleRow, contextLines], orientation: .vertical, spacing: 6)
+        contextLines.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+        let card = PadCardView(content: body, insets: NSEdgeInsets(top: 9, left: 12, bottom: 9, right: 12))
+        card.setAccessibilityRole(.group)
+        card.setAccessibilityLabel("Transcript context for the selected note")
+        return card
     }
 
     private func buildFooter() -> NSView {
-        let privateIcon = NSImageView(image: symbol("lock.fill", size: 11)!)
+        let privateIcon = NSImageView(image: symbol("lock.fill", size: 10)!)
         privateIcon.contentTintColor = .secondaryLabelColor
-        let privateLabel = label("Stored locally in this meeting only", size: 11, weight: .medium, color: .secondaryLabelColor)
-        let privateIndicator = stack([privateIcon, privateLabel], orientation: .horizontal, spacing: 5, alignment: .centerY)
+        let privateLabel = label("Local only", size: 11, weight: .medium, color: .secondaryLabelColor)
+        let privateIndicator = stack([privateIcon, privateLabel], orientation: .horizontal, spacing: 4, alignment: .centerY)
         privateIndicator.setAccessibilityLabel("Private: notes stay local to this meeting")
+        privateIndicator.setContentHuggingPriority(.required, for: .horizontal)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let actions = stack([newNoteButton, deleteButton, markerButton, saveButton], orientation: .horizontal, spacing: 7, alignment: .centerY)
-        let footer = stack([privateIndicator, spacer, actions], orientation: .horizontal, spacing: 9, alignment: .centerY)
-        footer.setAccessibilityLabel("Note actions")
-        return stack([separator(), statusLabel, footer], orientation: .vertical, spacing: 8)
+        let actions = stack([newNoteButton, deleteButton, markerButton, saveButton], orientation: .horizontal, spacing: 6, alignment: .centerY)
+        let actionRow = stack([privateIndicator, spacer, actions], orientation: .horizontal, spacing: 8, alignment: .centerY)
+        actionRow.setAccessibilityLabel("Note actions")
+
+        let enhanceSpacer = NSView()
+        enhanceSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let enhanceRow = stack([enhanceGuidance, enhanceSpacer, enhanceButton], orientation: .horizontal, spacing: 8, alignment: .centerY)
+        enhanceRow.setAccessibilityLabel("AI brief")
+
+        let footer = stack([separator(), statusLabel, actionRow, enhanceRow], orientation: .vertical, spacing: 7)
+        for row in [actionRow, enhanceRow] {
+            row.widthAnchor.constraint(equalTo: footer.widthAnchor).isActive = true
+        }
+        return footer
     }
 
     private func render() {
@@ -290,13 +391,119 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         statusLabel.stringValue = statusText(for: viewModel.saveState)
         statusLabel.textColor = statusColor(for: viewModel.saveState)
         statusLabel.setAccessibilityValue(viewModel.saveState.accessibilityDescription)
+        renderLifecycle()
+        renderEnhancement()
         rebuildNoteTable()
+        renderContext()
 
         templateSelector.nextKeyView = editor
         editor.nextKeyView = markerButton
         markerButton.nextKeyView = saveButton
         saveButton.nextKeyView = newNoteButton
         newNoteButton.nextKeyView = deleteButton
+        deleteButton.nextKeyView = enhanceButton
+        enhanceButton.nextKeyView = templateSelector
+    }
+
+    private func renderLifecycle() {
+        let lifecycle = viewModel.status.lifecycle
+        lifecycleHeadline.stringValue = lifecycle.headline(elapsed: elapsedText(for: lifecycle))
+        lifecycleDetail.stringValue = lifecycle.detail
+        lifecycleDot.layer?.backgroundColor = lifecycleTint(for: lifecycle).cgColor
+        lifecycleCard.setAccessibilityValue(lifecycle.accessibilityDescription)
+        lifecycleHeadline.setAccessibilityLabel(lifecycle.accessibilityDescription)
+        if lifecycle.isRecording {
+            if elapsedTimer == nil {
+                elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.tickElapsed() }
+                }
+            }
+        } else {
+            elapsedTimer?.invalidate()
+            elapsedTimer = nil
+        }
+    }
+
+    private func tickElapsed() {
+        let lifecycle = viewModel.status.lifecycle
+        guard lifecycle.isRecording else {
+            elapsedTimer?.invalidate()
+            elapsedTimer = nil
+            return
+        }
+        lifecycleHeadline.stringValue = lifecycle.headline(elapsed: elapsedText(for: lifecycle))
+    }
+
+    private func elapsedText(for lifecycle: MeetingPadLifecycle) -> String? {
+        guard case let .recording(startedAt) = lifecycle else { return nil }
+        return MeetingNoteContext.clock(Int(max(0, Date().timeIntervalSince(startedAt)) * 1_000))
+    }
+
+    private func lifecycleTint(for lifecycle: MeetingPadLifecycle) -> NSColor {
+        switch lifecycle {
+        case .unbound: .tertiaryLabelColor
+        case .recording: .systemRed
+        case let .stopped(transcript):
+            switch transcript {
+            case .afterRecording, .pending, .transcribing: .systemOrange
+            case .failed: .systemRed
+            case .disabled: .tertiaryLabelColor
+            case .ready: .systemGreen
+            }
+        }
+    }
+
+    private func renderEnhancement() {
+        let enhancement = viewModel.status.enhancement
+        enhanceButton.title = enhancement.buttonTitle
+        enhanceButton.isEnabled = enhancement.isEnabled
+        enhanceButton.image = symbol(enhanceSymbolName(for: enhancement), size: 13)
+        enhanceButton.bezelColor = enhancement.isEnabled ? .controlAccentColor : nil
+        enhanceButton.setAccessibilityLabel(enhancement.buttonTitle)
+        enhanceButton.setAccessibilityHelp(enhancement.guidance)
+        enhanceGuidance.stringValue = enhancement.guidance
+        enhanceGuidance.setAccessibilityValue(enhancement.guidance)
+    }
+
+    private func enhanceSymbolName(for enhancement: MeetingEnhancementAvailability) -> String {
+        switch enhancement {
+        case .providerDisabled: "cpu"
+        case .briefAvailable: "doc.text"
+        default: "sparkles"
+        }
+    }
+
+    private func renderContext() {
+        contextLines.arrangedSubviews.forEach {
+            contextLines.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        guard let context = viewModel.selectedNoteContext else {
+            contextCard.isHidden = true
+            contextCard.setAccessibilityValue("")
+            return
+        }
+        contextCard.isHidden = false
+        let anchor = MeetingNoteContext.clock(context.capturedAtMS)
+        contextTitle.stringValue = context.isNearestFallback ? "Nearest to \(anchor)" : "Said around \(anchor)"
+        for line in context.lines {
+            let row = ContextLineView(
+                stamp: "\(MeetingNoteContext.clock(line.startMS)) \(speakerTitle(line.speaker))",
+                text: line.text
+            )
+            contextLines.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: contextLines.widthAnchor).isActive = true
+        }
+        let spoken = context.lines.map { "\(speakerTitle($0.speaker)) at \(MeetingNoteContext.clock($0.startMS)): \($0.text)" }
+        contextCard.setAccessibilityValue(([contextTitle.stringValue] + spoken).joined(separator: ". "))
+    }
+
+    private func speakerTitle(_ speaker: String) -> String {
+        switch speaker.lowercased() {
+        case "me": "Me"
+        case "them": "Them"
+        default: speaker
+        }
     }
 
     private func rebuildNoteTable() {
@@ -313,6 +520,7 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         if let id = viewModel.selectedNoteID,
            let row = notes.firstIndex(where: { $0.id == id }) {
             noteTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            noteTable.scrollRowToVisible(row)
         } else {
             noteTable.deselectAll(nil)
         }
@@ -365,11 +573,6 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         return formatter.string(from: date)
     }
 
-    private func timestampText(_ milliseconds: Int) -> String {
-        let totalSeconds = max(0, milliseconds / 1_000)
-        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
-    }
-
     private func label(_ text: String, size: CGFloat, weight: NSFont.Weight, color: NSColor = .labelColor) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: size, weight: weight)
@@ -417,7 +620,7 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
         cell.identifier = identifier
         let note = displayedNotes[row]
         cell.configure(
-            timestamp: timestampText(note.capturedAtMS),
+            timestamp: MeetingNoteContext.clock(note.capturedAtMS),
             preview: notePreview(note.text),
             accessibilityText: note.text
         )
@@ -442,6 +645,12 @@ final class MeetingNotesWindowController: NSWindowController, NSTextViewDelegate
     @objc private func newNote() {
         viewModel.startNewNote()
         window?.makeFirstResponder(editor)
+    }
+
+    @objc private func enhance() {
+        let action = viewModel.status.enhancement.action
+        guard action != .none else { return }
+        onEnhance?(action)
     }
 
     @objc private func deleteSelectedNote() { viewModel.deleteSelectedNote() }
@@ -492,9 +701,9 @@ private final class MeetingNoteTableCellView: NSTableCellView {
         NSLayoutConstraint.activate([
             content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            content.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            content.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
-            timestampLabel.widthAnchor.constraint(equalToConstant: 38),
+            content.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            content.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -6),
+            timestampLabel.widthAnchor.constraint(equalToConstant: 44),
         ])
     }
 
@@ -507,5 +716,82 @@ private final class MeetingNoteTableCellView: NSTableCellView {
         setAccessibilityLabel("Note at \(timestamp)")
         setAccessibilityValue(accessibilityText)
         setAccessibilityHelp("Select this note to edit it in the note editor.")
+    }
+}
+
+/// One transcript line: a fixed left-to-right stamp column and a wrapping
+/// natural-direction text column, so Hebrew lines read right-to-left while
+/// the stamp stays put.
+private final class ContextLineView: NSView {
+    init(stamp: String, text: String) {
+        super.init(frame: .zero)
+        let stampLabel = NSTextField(labelWithString: stamp)
+        stampLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+        stampLabel.textColor = .secondaryLabelColor
+        stampLabel.alignment = .left
+        stampLabel.baseWritingDirection = .leftToRight
+        stampLabel.lineBreakMode = .byTruncatingTail
+        let textLabel = NSTextField(wrappingLabelWithString: text)
+        textLabel.font = .systemFont(ofSize: 12)
+        textLabel.textColor = .labelColor
+        textLabel.alignment = .natural
+        textLabel.baseWritingDirection = .natural
+        textLabel.maximumNumberOfLines = 3
+        textLabel.lineBreakMode = .byTruncatingTail
+        textLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        textLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let row = NSStackView(views: [stampLabel, textLabel])
+        row.orientation = .horizontal
+        row.alignment = .top
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            stampLabel.widthAnchor.constraint(equalToConstant: 76),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(stamp)
+        setAccessibilityValue(text)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+}
+
+/// Quiet elevated surface using semantic colors, refreshed on appearance
+/// changes so Dark Mode never keeps a stale light-mode layer color.
+private final class PadCardView: NSView {
+    init(content: NSView, insets: NSEdgeInsets) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: insets.left),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -insets.right),
+            content.topAnchor.constraint(equalTo: topAnchor, constant: insets.top),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -insets.bottom),
+        ])
+        refreshAppearance()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAppearance()
+    }
+
+    private func refreshAppearance() {
+        layer?.cornerRadius = 10
+        layer?.borderWidth = 1
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.borderColor = NSColor.separatorColor.cgColor
     }
 }

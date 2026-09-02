@@ -46,7 +46,6 @@ import Testing
     port: port,
     responses: [
       .success(openAIResponse(payload: payload(evidenceID: "s000001"))),
-      .success(openAIResponse(payload: payload(evidenceID: "s000002"))),
     ])
   let engine = LMStudioSummarizationEngine(
     configuration: try configuration(port: port),
@@ -60,12 +59,12 @@ import Testing
   #expect(
     brief.decisions[0].evidence == [
       try EvidenceReference(
-        segmentID: "s000002", transcriptJSONPointer: "/segments/1", startMS: 100, endMS: 200,
-        speaker: "them")
+        segmentID: "s000001", transcriptJSONPointer: "/segments/0", startMS: 0, endMS: 100,
+        speaker: "me")
     ])
 
   let requests = FakeLMStudioURLProtocol.requests(port: port)
-  #expect(requests.count == 2)
+  #expect(requests.count == 1)
   for request in requests {
     #expect(request.url?.host == "127.0.0.1")
     #expect(request.url?.path == "/v1/chat/completions")
@@ -89,6 +88,33 @@ import Testing
     #expect(!allowedEvidence.isEmpty)
     #expect(allowedEvidence.isSubset(of: Set(["s000001", "s000002"])))
   }
+}
+
+@Test func singleChunkWithNoCitableItemsDoesNotRunImpossibleReduction() async throws {
+  let port = 15110
+  let empty = BriefResponseDecoder.ModelBriefPayload(
+    language: "Hebrew/English",
+    overview: "No evidence-backed discussion was found.",
+    topics: [], decisions: [], actionItems: [], openQuestions: [], warnings: []
+  )
+  FakeLMStudioURLProtocol.configure(
+    port: port,
+    responses: [.success(openAIResponse(payload: empty))]
+  )
+  let engine = LMStudioSummarizationEngine(
+    configuration: try configuration(port: port),
+    session: fakeSession()
+  )
+
+  let brief = try await engine.summarize(
+    transcript: transcript(), rawNotes: notes(), input: input())
+
+  #expect(FakeLMStudioURLProtocol.requests(port: port).count == 1)
+  #expect(brief.overview == "No evidence-backed discussion was found.")
+  #expect(brief.topics.isEmpty)
+  #expect(brief.decisions.isEmpty)
+  #expect(brief.actionItems.isEmpty)
+  #expect(brief.openQuestions.isEmpty)
 }
 
 @Test func localGenerationHasAColdStartSafetyMargin() throws {
