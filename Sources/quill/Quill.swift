@@ -56,6 +56,7 @@ struct Run: ParsableCommand {
         // so it also has an unmistakable Dock icon while it is running.
         app.setActivationPolicy(.regular)
         app.applicationIconImage = MenuBarController.appIcon(size: 512)
+        app.mainMenu = quillMainMenu()
 
         let output = exportMixedAudio
             ? Config.RecordingOutput.separateWithMixedExport
@@ -77,6 +78,30 @@ struct Run: ParsableCommand {
         ))
         app.run()
     }
+}
+
+/// Quill normally lives in the menu bar, but it is still a regular AppKit app.
+/// Supplying the app menu gives Command-Q the standard responder-chain route
+/// to `NSApplication.terminate(_:)`, including when Controls is not key.
+@MainActor
+func quillMainMenu() -> NSMenu {
+    let mainMenu = NSMenu(title: "Main Menu")
+    let applicationItem = NSMenuItem(title: "Quill", action: nil, keyEquivalent: "")
+    let applicationMenu = NSMenu(title: "Quill")
+    let quit = NSMenuItem(
+        title: "Quit Quill",
+        action: #selector(NSApplication.terminate(_:)),
+        keyEquivalent: "q"
+    )
+    // A menu item with a nil target can be swallowed by the first responder
+    // when Quill has a controls field focused. Route the keyboard equivalent
+    // straight to AppKit's termination action instead.
+    quit.target = NSApplication.shared
+    quit.keyEquivalentModifierMask = .command
+    applicationMenu.addItem(quit)
+    applicationItem.submenu = applicationMenu
+    mainMenu.addItem(applicationItem)
+    return mainMenu
 }
 
 struct Doctor: ParsableCommand {
@@ -254,6 +279,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var noteSessionEndedAt: Date?
     private var lastTranscriptionStatus: TranscriptionCoordinator.Status = .idle
     private var padStatusGeneration = 0
+    private var isShuttingDown = false
     /// One coordinator lives for the entire application process.  In
     /// particular, reopening the brief window, retrying, or resuming a durable
     /// job never replaces an in-flight queue with a new coordinator.
@@ -353,8 +379,17 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     /// Stop any live session cleanly (finalizing files) and exit.
     func shutdown() {
-        stopSession()
         NSApp.terminate(nil)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isShuttingDown else { return .terminateNow }
+        isShuttingDown = true
+        // This is shared by the status-item Quit command, Dock Quit, and
+        // Command-Q, so an in-progress recording always receives its normal
+        // stop/finalize path before the process exits.
+        stopSession()
+        return .terminateNow
     }
 
     func showControls() { controls.show() }

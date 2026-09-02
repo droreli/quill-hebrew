@@ -34,8 +34,8 @@ final class ControlsWindowController: NSWindowController {
     init(root: URL, options: RecordingOptions) {
         self.options = options
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 840),
-            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 680),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -43,9 +43,13 @@ final class ControlsWindowController: NSWindowController {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
-        window.minSize = NSSize(width: 560, height: 740)
+        // The controls are intentionally compact by default, while the scroll
+        // view below keeps every setting reachable at smaller window heights.
+        window.minSize = NSSize(width: 560, height: 480)
         window.isReleasedWhenClosed = false
-        let frameAutosaveName = "QuillControlsWindow"
+        // A new name prevents a previously saved oversized frame from masking
+        // the new compact default on upgrade.
+        let frameAutosaveName = "QuillControlsWindowV2"
         if !window.setFrameUsingName(frameAutosaveName) {
             window.center()
         }
@@ -105,17 +109,40 @@ final class ControlsWindowController: NSWindowController {
         sessionPath.lineBreakMode = .byTruncatingMiddle
         sessionPath.textColor = .secondaryLabelColor
 
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.setAccessibilityLabel("Quill controls")
+
+        // NSScrollView starts an ordinary AppKit document view at its bottom.
+        // A flipped document keeps the pre-flight header at the top on every
+        // fresh open, matching the visual reading order of this form.
+        let document = FlippedDocumentView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.documentView = document
+        content.addSubview(scrollView)
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: content.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            document.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
+        ])
+
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(stack)
+        document.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 48),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -24),
+            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 48),
+            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -24),
         ])
 
         [header(), recordingHero(), recordingSetupCard(), readingAndOutputCard(), storageCard(), meetingIntelligenceCard()].forEach {
@@ -480,6 +507,10 @@ private final class RoundedCardView: NSView {
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         layer?.borderColor = NSColor.separatorColor.cgColor
     }
+}
+
+private final class FlippedDocumentView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 private final class RecordingStatusPill: NSView {
