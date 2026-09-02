@@ -170,6 +170,21 @@ import Testing
   }
 }
 
+@Test func decoderAcceptsFencedTypedContentPartsFromLocalOpenAICompatibleRuntime() throws {
+  let source = payload(evidenceID: "s000001")
+  let json = String(decoding: try JSONEncoder().encode(source), as: UTF8.self)
+  let response = try JSONSerialization.data(withJSONObject: [
+    "choices": [[
+      "message": [
+        "content": [["type": "text", "text": "```json\n\(json)\n```"]]
+      ]
+    ]]
+  ])
+
+  let decoded = try BriefResponseDecoder().decodePayload(from: response)
+  #expect(decoded == source)
+}
+
 @Test func disabledProviderAndResponseCapAvoidInference() async throws {
   let disabled = LMStudioSummarizationEngine(
     configuration: try LMStudioConfiguration(isEnabled: false), session: fakeSession())

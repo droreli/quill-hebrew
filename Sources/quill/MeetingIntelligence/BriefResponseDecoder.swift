@@ -47,24 +47,110 @@ struct BriefResponseDecoder: Sendable {
 
     private struct OpenAIEnvelope: Decodable {
         struct Choice: Decodable {
-            struct Message: Decodable { let content: String? }
-            let message: Message
+            struct Message: Decodable {
+                let content: StructuredContent?
+                let reasoningContent: StructuredContent?
+
+                enum CodingKeys: String, CodingKey {
+                    case content
+                    case reasoningContent = "reasoning_content"
+                }
+            }
+
+            let message: Message?
+            let text: StructuredContent?
         }
         let choices: [Choice]
+    }
+
+    /// LM Studio's OpenAI-compatible endpoint normally returns a string, but
+    /// some local model/runtime combinations return typed content parts. Keep
+    /// this boundary tolerant of those transport-only variants; the decoded
+    /// payload and every evidence ID remain subject to the same strict checks.
+    private enum StructuredContent: Decodable {
+        struct Part: Decodable {
+            let type: String?
+            let text: String?
+        }
+
+        case string(String)
+        case parts([Part])
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let value = try? container.decode(String.self) {
+                self = .string(value)
+                return
+            }
+            self = .parts(try container.decode([Part].self))
+        }
+
+        var candidates: [String] {
+            switch self {
+            case let .string(value): return [value]
+            case let .parts(parts):
+                let text = parts.compactMap(\.text).joined(separator: "\n")
+                return text.isEmpty ? [] : [text]
+            }
+        }
     }
 
     func decodePayload(from responseData: Data) throws -> ModelBriefPayload {
         do {
             let envelope = try JSONDecoder().decode(OpenAIEnvelope.self, from: responseData)
-            guard let content = envelope.choices.first?.message.content,
-                  let contentData = content.data(using: .utf8) else {
-                throw LMStudioError.malformedResponse
+            guard let choice = envelope.choices.first else { throw LMStudioError.malformedResponse }
+            let contentCandidates = (choice.message?.content?.candidates ?? [])
+                // A few local runtimes place the final structured response in
+                // reasoning_content. It is considered only if it independently
+                // decodes as the full schema below.
+                + (choice.message?.reasoningContent?.candidates ?? [])
+                + (choice.text?.candidates ?? [])
+            for content in contentCandidates {
+                if let payload = decodePayloadContent(content) {
+                    return payload
+                }
             }
-            return try JSONDecoder().decode(ModelBriefPayload.self, from: contentData)
+            throw LMStudioError.malformedResponse
         } catch let error as LMStudioError {
             throw error
         } catch {
             throw LMStudioError.malformedResponse
+        }
+    }
+
+    private func decodePayloadContent(_ content: String) -> ModelBriefPayload? {
+        for candidate in normalizedJSONCandidates(content) {
+            guard let data = candidate.data(using: .utf8),
+                  let payload = try? JSONDecoder().decode(ModelBriefPayload.self, from: data)
+            else { continue }
+            return payload
+        }
+        return nil
+    }
+
+    /// Normalizes formatting wrappers only. It never repairs, fills in, or
+    /// infers model facts; a candidate must still decode as the complete
+    /// schema before it can enter the evidence-validation path.
+    private func normalizedJSONCandidates(_ content: String) -> [String] {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        var candidates = [trimmed]
+        if trimmed.hasPrefix("```") {
+            let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+            if lines.count >= 3, let closing = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "```" }) {
+                let body = lines[1..<closing].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !body.isEmpty { candidates.append(body) }
+            }
+        }
+        // Some OpenAI-compatible proxies JSON-encode the content string one
+        // extra time. Unwrap at most once so ordinary model text is never
+        // repeatedly interpreted as executable or authoritative structure.
+        if let data = trimmed.data(using: .utf8),
+           let wrapped = try? JSONDecoder().decode(String.self, from: data) {
+            candidates.append(wrapped.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return candidates.reduce(into: []) { result, candidate in
+            if !result.contains(candidate) { result.append(candidate) }
         }
     }
 
