@@ -100,7 +100,7 @@ For the recommended model, load a 16,384-token context in LM Studio. With the
 `lms` CLI installed, one explicit example is:
 
 ```sh
-lms load google/gemma-4-26b-a4b-qat --context-length 16384 --ttl 3600
+lms load google/gemma-4-26b-a4b-qat --context-length 16384
 ```
 
 Quill sends `reasoning_effort: none` because meeting extraction is a bounded
