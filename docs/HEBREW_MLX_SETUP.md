@@ -11,16 +11,18 @@ model.
 
 - macOS 15 or later for Quill's system-audio capture.
 - An Apple-silicon Mac for MLX.
-- Homebrew, Python 3, and an internet connection for this one-time setup.
+- Homebrew, Python 3 installed through Homebrew, and an internet connection for this one-time setup.
 - About 2 GB of free space for the model and Python environment.
 
 ## Recommended setup
 
-From the repository root:
+Install Homebrew first if needed; the clean-Mac guide has the official
+bootstrap command. Then, from the repository root:
 
 ```sh
+brew install python ffmpeg
 ./scripts/install-hebrew-mlx.sh
-quill doctor
+"$HOME/Applications/Quill.app/Contents/MacOS/quill" doctor
 ```
 
 The script installs `ffmpeg` through Homebrew, creates a dedicated virtual
@@ -37,7 +39,7 @@ to the model host or any transcription service.
 ## Manual setup
 
 ```sh
-brew install ffmpeg
+brew install python ffmpeg
 python3 -m venv "$HOME/.local/share/quill-hebrew/mlx-whisper"
 "$HOME/.local/share/quill-hebrew/mlx-whisper/bin/pip" install --upgrade \
   "mlx-whisper" "huggingface_hub[hf_xet]"
@@ -46,8 +48,25 @@ python3 -m venv "$HOME/.local/share/quill-hebrew/mlx-whisper"
   mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx
 ```
 
-Then set `mlx_python` and `mlx_model_dir` in `~/.config/quill/config.json` to
-the two paths above and select `mlx-hebrew` in Quill's controls.
+Merge the following keys into the existing `transcription` object in
+`~/.config/quill/config.json`; do not replace the whole file or unrelated
+settings:
+
+```json
+{
+  "transcription": {
+    "enabled": true,
+    "engine": "mlx-hebrew",
+    "language": "hebrew",
+    "mlx_python": "~/.local/share/quill-hebrew/mlx-whisper/bin/python",
+    "mlx_model_dir": "~/Library/Application Support/quill-hebrew/models/ivrit-ai-whisper-large-v3-turbo-mlx"
+  }
+}
+```
+
+Select `mlx-hebrew` in Quill's controls. For an automatic Hebrew-English
+session, choose **Hebrew + English** there; the MLX bridge uses automatic
+decoding unless the language is explicitly Hebrew-only.
 
 ## Accuracy note
 

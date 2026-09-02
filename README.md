@@ -23,9 +23,14 @@ Spotlight, the Dock, and launch at login.
 
 ## Install
 
+If you have not cloned the repository yet, use the exact clone command in
+[First setup on a clean Mac](docs/FRESH_MAC_SETUP.md#1-prerequisites-and-clone).
+From that checkout:
+
 ```sh
-cd quill
+cd "$HOME/Developer/quill-hebrew"
 ./scripts/install-app.sh
+open -a Quill
 ```
 
 This builds and ad-hoc signs `~/Applications/Quill.app` and registers a
@@ -55,17 +60,20 @@ On an Apple-silicon Mac, run:
 
 ```sh
 ./scripts/install-hebrew-mlx.sh
+"$HOME/Applications/Quill.app/Contents/MacOS/quill" doctor
 ```
 
-The script installs the local Python runtime, `ffmpeg`, and the MLX model, then
-writes the two local paths Quill needs to `~/.config/quill/config.json`. Review
-the script before running it; it changes only your local development/runtime
+The script uses available Python 3 to create a local virtual environment,
+installs `ffmpeg` through Homebrew, downloads the MLX model, then writes the
+two local paths Quill needs to `~/.config/quill/config.json`. Review the
+script before running it; it changes only your local development/runtime
 environment and downloads the model from Hugging Face. For manual setup and
 troubleshooting, see [docs/HEBREW_MLX_SETUP.md](docs/HEBREW_MLX_SETUP.md).
 
 ## How to use
 
-1. **Run it** (`quill` in a terminal, or the LaunchAgent).
+1. **Run it** (open **Quill** from Spotlight, or let the registered
+   LaunchAgent start it at login).
 2. **Click the feather in the menu bar → Start recording.** First use prompts
    for microphone and System Audio Recording permissions. While recording, the
    icon turns red with a running elapsed counter, and macOS shows the purple
@@ -158,13 +166,14 @@ for the required safe architecture and M5/64 GB operating envelope.
 
 The LM Studio provider is opt-in and literal-loopback only
 (`127.0.0.1` or `::1`); Quill will never manage LM Studio or its models. The
-initial personal recommendation, `google/gemma-4-26b-a4b-qat`, is configurable
+configured historic profile, `google/gemma-4-26b-a4b-qat`, is configurable
 and recorded with **reported**, not checksum-verified, runtime provenance.
-For this model, load a 16,384-token context in LM Studio. Quill disables model
+It is not a universal model or context recommendation. Quill disables model
 thinking for this bounded structured-output task, constrains evidence IDs to
 the actual transcript, caps each completion, and allows up to five minutes per
 local request.
-Read [Local Meeting Notes](docs/LOCAL_MEETING_NOTES.md) and
+Read [First setup on a clean Mac](docs/FRESH_MAC_SETUP.md#6-optional-local-lm-studio-meeting-briefs),
+[Local Meeting Notes](docs/LOCAL_MEETING_NOTES.md), and
 [Privacy and consent](PRIVACY_AND_CONSENT.md) for the shipped flow, model
 boundary, retention, removal, recovery, and consent reminder.
 
@@ -234,6 +243,30 @@ for future recordings after you turn them on.
 
 ## CLI
 
+The app-bundle install does **not** create a global `quill` command. For the
+installed app, set a local shell variable first:
+
+```sh
+QUILL_BIN="$HOME/Applications/Quill.app/Contents/MacOS/quill"
+```
+
+```sh
+"$QUILL_BIN"                 # run the menu-bar daemon (^C to quit)
+"$QUILL_BIN" run --out <dir> # custom recordings root (default ~/Recordings)
+"$QUILL_BIN" run --export-mixed-audio # additionally make mixed.m4a for listening
+"$QUILL_BIN" run --controls-only # open the controls window without recording
+"$QUILL_BIN" doctor          # check permissions, recordings folder, models
+"$QUILL_BIN" verify-mix      # synthetic, no-permission mixed-audio verification
+"$QUILL_BIN" verify-mlx <audio> # check Quill's local MLX bridge and timed output
+"$QUILL_BIN" retranscribe <session> # re-run a finished session without recording again
+"$QUILL_BIN" brief <session> --enable # explicitly generate with an already-running local LM Studio
+"$QUILL_BIN" brief <session> --enable --endpoint http://127.0.0.1:1234 --model <model-id>
+"$QUILL_BIN" install --launch-at-login
+"$QUILL_BIN" install --uninstall
+```
+
+A developer-managed global `quill` binary can use the same subcommands.
+
 ```sh
 quill                        # run the menu-bar daemon (^C to quit)
 quill run --out <dir>        # custom recordings root (default ~/Recordings)
@@ -263,7 +296,7 @@ Product planning for the next local-first phase:
 - **AVAudioFile** — streaming AAC encode into CAF
 - **MLX Whisper / pinned ivrit.ai Hebrew Turbo model** — local Apple-GPU
   Hebrew and Hebrew-English transcription
-- **FluidAudio / Parakeet** — local Core ML English engine / fallback
+- **FluidAudio / Parakeet** — explicitly selected local Core ML English engine
 - **NSStatusItem** — the whole UI
 
 ## Gotchas

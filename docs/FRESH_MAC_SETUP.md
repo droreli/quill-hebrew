@@ -270,7 +270,17 @@ lms ps
 lms server status
 ```
 
-If the `lms` command is unavailable, launch LM Studio once, then try again.
+If the `lms` command is unavailable, use the GUI path below or LM Studio's
+documented CLI bootstrap.
+
+- **No-CLI GUI path:** use **My Models** to inspect/download/load the model,
+  **Developer** to start the local server, then use Quill's **Check
+  availability** and the `curl /v1/models` synthetic check above. No `lms`
+  command is needed.
+- **CLI path:** with Node.js and `npx` available, LM Studio documents
+  `npx lmstudio install-cli`. Open a new Terminal, run `lms --help`, then use
+  `lms ls`. If that does not put `lms` on your shell PATH, use the GUI path
+  instead of adding an unverified binary directory manually.
 For a custom model location, choose it in LM Studio's **My Models** settings;
 do not move model files while LM Studio has them loaded. Quill records only the
 provider-reported model ID and runtime details in a generated Brief.
@@ -286,7 +296,8 @@ Useful failure meanings:
 
 Primary references: [LM Studio local server](https://lmstudio.ai/docs/developer/core/server),
 [OpenAI-compatible endpoints](https://lmstudio.ai/docs/developer/openai-compat),
-and [LM Studio CLI/model-directory discovery](https://lmstudio.ai/docs/cli).
+[LM Studio CLI/model-directory discovery](https://lmstudio.ai/docs/cli), and
+[official CLI bootstrap](https://lmstudio.ai/docs/developer/openai-compat/tools).
 
 ## 7. Upgrade and rollback
 
@@ -327,7 +338,8 @@ user-owned local data.
 2. **No feather:** run `open -a Quill`; then inspect
    `/tmp/quill.err.log` and the login registration command above. A running
    process alone does not prove the menu-bar item is visible.
-3. **Hebrew MLX unavailable:** confirm Apple silicon, rerun `quill doctor`,
+3. **Hebrew MLX unavailable:** confirm Apple silicon, rerun
+   `"$HOME/Applications/Quill.app/Contents/MacOS/quill" doctor`,
    and verify the Python and model paths in the Hebrew setup section. Do not
    switch an automatic/Hebrew meeting to Parakeet by accident.
 4. **`ffmpeg` missing after login:** ensure `brew install ffmpeg` completed.
@@ -338,18 +350,29 @@ user-owned local data.
 
 ## Reusable Codex or Claude Code handoff prompt
 
-Copy the following only when asking an assistant to help with setup or a code
-change. It intentionally does not authorize recording or privacy changes:
+Copy the following for a real fresh setup. It authorizes only the setup steps
+listed, not recording or privacy changes:
 
 ```text
-Work only in ~/Developer/quill-hebrew. Preserve all existing recordings,
-~/.config/quill/config.json, LM Studio models/caches, unrelated models, and
-unrelated files. Do not start or stop a recording, process any user recording,
-grant or change macOS permissions, install/relaunch Quill, install/update LM
-Studio, download/delete/move models, or edit the LaunchAgent unless I explicitly
-ask in this message. Begin with read-only inspection and explain any action that
-would affect persistent local state. Prefer documentation, tests, and isolated
-synthetic fixtures. Never paste, upload, quote, or retain transcript/audio/note
-content. If a requested step needs a permission prompt or would alter user data,
-stop and ask me for confirmation.
+Set up Quill Hebrew on this Mac. First inspect the current state without
+printing or copying recordings, transcript/audio/note content, configuration
+values, or model inventories. If ~/Developer/quill-hebrew does not exist, you
+are authorized to clone https://github.com/droreli/quill-hebrew.git there; if
+it exists, preserve its unrelated changes and use that checkout.
+
+After inspection, you are authorized to install required developer/runtime
+dependencies (Xcode Command Line Tools, Homebrew Python, ffmpeg), build and
+install Quill.app, register Quill at login, and download the documented Hebrew
+MLX model only when this Mac is Apple silicon and Hebrew transcription is
+wanted. Preserve ~/.config/quill/config.json, all recordings, LM Studio
+models/caches, unrelated models, and unrelated files. If a Quill recording is
+active or source tracks are open, do not install, relaunch, or change the
+LaunchAgent; report that and stop.
+
+Do not start or stop a recording, process any user recording, grant or change
+macOS permissions, upload/share content, or configure optional LM Studio. Ask
+before selecting, downloading, moving, or deleting any LM Studio model, before
+changing a custom model directory, and before any action that needs user input
+in a macOS permission dialog. Do not restart an existing recording. Use only
+synthetic/no-recording verification and report every persistent change.
 ```
