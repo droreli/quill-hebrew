@@ -75,9 +75,10 @@ The Markdown artifact is a readable rendering of the generated brief.
    audio tracks or `mixed.m4a` as summary input.
 6. Review the read-only result. In this MVP, edit raw notes and regenerate to
    create a new brief; the viewer does not edit generated sections in place.
-   Decisions, action items, topics, and questions must refer to transcript
-   segments or raw notes. Unknown owners and dates should stay unknown rather
-   than be invented.
+   Decisions, action items, topics, and questions must have transcript
+   evidence. Raw notes remain user-owned context and are not promoted into
+   generated claims. Unknown owners and dates should stay unknown rather than
+   be invented.
 
 Generated output is a reviewable draft, not a substitute for the recording or
 transcript and not a guarantee that every statement is correct or complete.
@@ -100,19 +101,14 @@ recording and transcription normally; use setup or retry only when you choose
 to generate a brief. Provider edits are saved only through the explicit Save
 action, and the CLI requires `--enable` for every direct generation invocation.
 
-The initial personal recommendation is `google/gemma-4-26b-a4b-qat`. It is
-configurable and is not a public default. For this provider, Quill can record
-the model ID and runtime details that LM Studio reports, but that is **reported
-runtime provenance** only. It does not prove the installed weights or their
-checksum. Do not treat a reported model name as checksum-verified provenance;
-that requires a separate verified installation record.
-
-For the recommended model, load a 16,384-token context in LM Studio. With the
-`lms` CLI installed, one explicit example is:
-
-```sh
-lms load google/gemma-4-26b-a4b-qat --context-length 16384
-```
+The configured `google/gemma-4-26b-a4b-qat` is a historic personal profile
+default, not a public default or required model. Quill can record a model ID
+and runtime details that LM Studio reports, but that is **reported runtime
+provenance** only. It does not prove installed weights or checksums. See
+[First setup on a clean Mac](FRESH_MAC_SETUP.md#6-optional-local-lm-studio-meeting-briefs)
+for a loopback-only setup, a no-recording synthetic check, current
+model-selection guidance, RAM tiers, model-directory discovery, timeouts, and
+the low-memory option of leaving Briefs disabled.
 
 Quill sends `reasoning_effort: none` because meeting extraction is a bounded
 formatting task: default model thinking can consume the completion window and

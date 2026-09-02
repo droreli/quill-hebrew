@@ -16,6 +16,11 @@ Named for the feather. Sibling of [parrot](https://github.com/digimata/parrot),
 with the same local Swift core and a normal macOS app bundle for Finder,
 Spotlight, the Dock, and launch at login.
 
+> **New to Quill? Start with [First setup on a clean Mac](docs/FRESH_MAC_SETUP.md).**
+> It is the complete clone, build, install, permissions, Hebrew/English engine,
+> local-LM-Studio, upgrade, rollback, and Codex/Claude handoff guide. Nothing
+> in that guide starts a recording.
+
 ## Install
 
 ```sh
@@ -23,9 +28,10 @@ cd quill
 ./scripts/install-app.sh
 ```
 
-This builds and ad-hoc signs `~/Applications/Quill.app`, registers it to start
-at login, and launches it without beginning a recording. After installation,
-open it normally from Spotlight by searching for **Quill**. The historical
+This builds and ad-hoc signs `~/Applications/Quill.app` and registers a
+per-user login agent. Open it explicitly after installation with
+`open -a Quill` or Spotlight by searching for **Quill**. The installer does
+not record audio or change Quill's saved configuration. The historical
 single-binary installation remains supported for developers.
 
 **Requires:** macOS 15+ (Core Audio process taps for system audio — no
@@ -96,16 +102,12 @@ written is still readable.
 
 ## Transcription
 
-Built in, on-device, automatic. On this Mac, the default is the same proven
-**Hebrew Whisper Large V3 Turbo MLX** model used by Tamlil, running locally on
-the Apple GPU. It supports Hebrew and automatic Hebrew-English conversation
-decoding; the pinned model is already cached locally, and the runtime sets
-offline flags so it cannot fall back to a cloud service. The upstream Hebrew
-model is Apache-2.0 licensed. If the MLX runtime or GPU is unavailable, Quill
-falls back to local English **Parakeet TDT 0.6B v2** via
-[FluidAudio](https://github.com/FluidInference/FluidAudio). A local Hebrew CPU
-fallback is also selectable in controls when Tamlil's existing CPU command is
-available.
+Built in and on-device. After the optional Hebrew MLX setup, the default is
+**Hebrew Whisper Large V3 Turbo MLX**, running locally on the Apple GPU. It
+supports Hebrew and automatic Hebrew-English conversation decoding; after its
+one-time setup it runs locally with no cloud fallback. The upstream Hebrew
+model is Apache-2.0 licensed. A local Hebrew CPU fallback is selectable in
+controls when its local command is available.
 
 Each clean track is transcribed separately, shifted by its start offset so both
 share one clock, and merged by timestamp. Jobs run in a serial queue — you can
@@ -117,7 +119,8 @@ on next launch (the filesystem is the queue: a session with `meta.json` but no
 For Hebrew or automatic-language sessions, an unavailable Hebrew MLX runtime
 is reported as a transcription failure rather than silently producing an
 English Parakeet transcript. Select the explicit local Hebrew CPU engine when
-that fallback is appropriate. English-only sessions may use Parakeet.
+that fallback is appropriate. For English-only sessions, explicitly select
+**English only** and **English Parakeet — local** in Open controls….
 
 ## Privacy and consent
 
@@ -206,9 +209,10 @@ for future recordings after you turn them on.
 - `transcription.enabled` — set `false` to just record.
 - `transcription.engine` — `mlx-hebrew` (default local GPU), `parakeet`
   (local English Core ML), or `hebrew-cpu` (Tamlil's local CPU fallback).
-- `transcription.language` — `automatic` (default; Hebrew and English),
-  `hebrew`, or `english`. The controls window exposes these as plain-language
-  choices.
+- `transcription.language` — `automatic` (Hebrew + English with the MLX
+  engine), `hebrew`, or `english`. The controls window exposes these as
+  plain-language choices. English-only transcription requires choosing both
+  `english` and the `parakeet` engine; it is not an automatic fallback.
 - `transcription.timestamps` — show/hide timestamps in `transcript.md`;
   `transcript.json` always retains exact timing.
 - `speaker_labels` — show/hide `me` / `them` in `transcript.md`; the JSON

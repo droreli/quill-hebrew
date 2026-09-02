@@ -77,8 +77,8 @@ enum DoctorReport {
     }
 
     /// Never discover a missing local model after an important meeting. The
-    /// preferred Hebrew MLX runtime is entirely local; Parakeet is retained
-    /// as a local English fallback.
+    /// preferred Hebrew MLX runtime is entirely local; Parakeet is a
+    /// separately selected local English engine.
     static func checkTranscription() -> Check {
         guard Config.transcriptionEnabled() else {
             return Check(
@@ -97,8 +97,8 @@ enum DoctorReport {
             }
             return Check(
                 name: "transcription",
-                status: .warn("Hebrew MLX runtime/model unavailable — will fall back to English Parakeet"),
-                remediation: "install the local MLX runtime and pinned model, or set transcription.engine to parakeet"
+                status: .warn("Hebrew MLX runtime/model unavailable"),
+                remediation: "install the local MLX runtime and pinned model; use Parakeet only with English-only language selected"
             )
         }
 
