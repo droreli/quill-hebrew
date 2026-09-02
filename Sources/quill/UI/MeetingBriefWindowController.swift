@@ -15,6 +15,7 @@ final class MeetingBriefWindowController: NSWindowController {
     private let scrollView = NSScrollView()
     private let contentStack = NSStackView()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let selectedSessionLabel = NSTextField(labelWithString: "No selected recording")
     private let primaryButton = NSButton(title: "", target: nil, action: nil)
     private let revealButton = NSButton(title: "Reveal session", target: nil, action: nil)
 
@@ -96,7 +97,10 @@ final class MeetingBriefWindowController: NSWindowController {
         statusLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.setAccessibilityRole(.staticText)
-        let copy = vertical([title, statusLabel], spacing: 3)
+        selectedSessionLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        selectedSessionLabel.textColor = .tertiaryLabelColor
+        selectedSessionLabel.setAccessibilityIdentifier("meetingBrief.selectedSession")
+        let copy = vertical([title, selectedSessionLabel, statusLabel], spacing: 3)
         let icon = iconTile("sparkles", tint: .controlAccentColor)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -135,6 +139,8 @@ final class MeetingBriefWindowController: NSWindowController {
 
         statusLabel.stringValue = viewModel.state.title
         statusLabel.setAccessibilityLabel(viewModel.state.accessibilityDescription)
+        selectedSessionLabel.stringValue = viewModel.sessionDirectory.map { "Selected recording · \($0.lastPathComponent)" } ?? "No selected recording"
+        selectedSessionLabel.setAccessibilityValue(viewModel.sessionDirectory?.path ?? "")
         revealButton.isEnabled = viewModel.sessionDirectory != nil
         configurePrimaryButton(for: viewModel.state)
 

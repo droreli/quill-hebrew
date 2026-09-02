@@ -7,6 +7,7 @@ final class ControlsWindowController: NSWindowController {
     var onOptionsChanged: ((RecordingOptions) -> Void)?
     var onToggleRecording: (() -> Void)?
     var onOpenRecordings: (() -> Void)?
+    var onOpenLibrary: (() -> Void)?
     var onOpenSession: (() -> Void)?
     var onOpenNotes: (() -> Void)?
     var onOpenBrief: (() -> Void)?
@@ -24,6 +25,7 @@ final class ControlsWindowController: NSWindowController {
     private let statusPill = RecordingStatusPill()
     private let startStop = NSButton(title: "Start recording", target: nil, action: nil)
     private let sessionButton = NSButton(title: "Reveal", target: nil, action: nil)
+    private let libraryButton = NSButton(title: "Browse meetings…", target: nil, action: nil)
     private let meetingNotesButton = NSButton(title: "Meeting notes…", target: nil, action: nil)
     private let meetingBriefButton = NSButton(title: "Meeting brief…", target: nil, action: nil)
     private let providerSetupButton = NSButton(title: "Provider setup…", target: nil, action: nil)
@@ -32,7 +34,7 @@ final class ControlsWindowController: NSWindowController {
     init(root: URL, options: RecordingOptions) {
         self.options = options
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 780),
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 840),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -41,7 +43,7 @@ final class ControlsWindowController: NSWindowController {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
-        window.minSize = NSSize(width: 560, height: 700)
+        window.minSize = NSSize(width: 560, height: 740)
         window.isReleasedWhenClosed = false
         let frameAutosaveName = "QuillControlsWindow"
         if !window.setFrameUsingName(frameAutosaveName) {
@@ -116,7 +118,7 @@ final class ControlsWindowController: NSWindowController {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -24),
         ])
 
-        [header(), recordingSetupCard(), readingAndOutputCard(), storageCard(), meetingIntelligenceCard(), actionFooter()].forEach {
+        [header(), recordingHero(), recordingSetupCard(), readingAndOutputCard(), storageCard(), meetingIntelligenceCard()].forEach {
             stack.addArrangedSubview($0)
             $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -158,7 +160,18 @@ final class ControlsWindowController: NSWindowController {
         startStop.bezelStyle = .rounded
         startStop.controlSize = .large
         startStop.imagePosition = .imageLeading
-        startStop.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        startStop.heightAnchor.constraint(equalToConstant: 64).isActive = true
+        startStop.keyEquivalent = " "
+        startStop.keyEquivalentModifierMask = []
+        startStop.toolTip = "Start or stop recording. Control Command R works globally."
+        startStop.setAccessibilityHelp("Starts or stops local microphone and system-audio recording. Control Command R works from anywhere.")
+
+        libraryButton.target = self
+        libraryButton.action = #selector(openLibrary)
+        libraryButton.bezelStyle = .rounded
+        libraryButton.image = symbol("rectangle.stack", size: 12, weight: .medium)
+        libraryButton.imagePosition = .imageLeading
+        libraryButton.setAccessibilityLabel("Browse completed meetings")
 
         meetingNotesButton.target = self
         meetingNotesButton.action = #selector(openNotes)
@@ -230,7 +243,9 @@ final class ControlsWindowController: NSWindowController {
         let rows = vertical([
             locationRow("folder", "Recording folder", recordingPath, action: #selector(revealRecordings)),
             separator(),
-            locationRow("doc.text", "Latest transcript", sessionPath, action: #selector(revealSession), button: sessionButton),
+            locationRow("doc.text", "Last recording", sessionPath, action: #selector(revealSession), button: sessionButton),
+            separator(),
+            locationRow("rectangle.stack", "Meeting library", NSTextField(labelWithString: "Browse a selected completed recording, its transcript, source tracks, listening copy, notes, and brief."), action: #selector(openLibrary), button: libraryButton),
         ], spacing: 0)
         return card("internaldrive", "Files", "Your recordings stay in a local folder you control.", rows, "Recording files")
     }
@@ -251,10 +266,17 @@ final class ControlsWindowController: NSWindowController {
         )
     }
 
-    private func actionFooter() -> NSView {
+    private func recordingHero() -> NSView {
         let helper = label("⌃⌘R starts or stops recording from anywhere", size: 11, weight: .regular, color: .tertiaryLabelColor)
         helper.alignment = .center
-        return vertical([separator(), startStop, helper], spacing: 9)
+        let title = label("Ready when you are", size: 15, weight: .semibold)
+        title.alignment = .center
+        let detail = label("Capture stays on this Mac. Stop when the meeting ends; canonical transcription follows safely.", size: 11, weight: .regular, color: .secondaryLabelColor)
+        detail.alignment = .center
+        let column = vertical([title, detail, startStop, helper], spacing: 8)
+        column.alignment = .centerX
+        startStop.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
+        return RoundedCardView(content: column)
     }
 
     private func card(_ symbolName: String, _ title: String, _ subtitle: String, _ body: NSView, _ accessibilityLabel: String) -> NSView {
@@ -429,6 +451,7 @@ final class ControlsWindowController: NSWindowController {
 
     @objc private func toggle() { onToggleRecording?() }
     @objc private func revealRecordings() { onOpenRecordings?() }
+    @objc private func openLibrary() { onOpenLibrary?() }
     @objc private func revealSession() { onOpenSession?() }
     @objc private func openNotes() { onOpenNotes?() }
     @objc private func openBrief() { onOpenBrief?() }

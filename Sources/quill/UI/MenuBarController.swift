@@ -16,6 +16,7 @@ final class MenuBarController {
     var onToggle: (() -> Void)?
     var onOpenControls: (() -> Void)?
     var onOpenFolder: (() -> Void)?
+    var onOpenLibrary: (() -> Void)?
     var onOpenNotes: (() -> Void)?
     var onOpenBrief: (() -> Void)?
     var onOpenBriefSession: ((URL) -> Void)?
@@ -70,6 +71,14 @@ final class MenuBarController {
         openFolder.image = Self.symbol("folder")
         menu.addItem(openFolder)
 
+        let openLibrary = NSMenuItem(
+            title: "Meeting library…",
+            action: #selector(openLibraryClicked),
+            keyEquivalent: "l"
+        )
+        openLibrary.image = Self.symbol("rectangle.stack")
+        menu.addItem(openLibrary)
+
         let openNotes = NSMenuItem(
             title: "Meeting notes…",
             action: #selector(openNotesClicked),
@@ -110,7 +119,7 @@ final class MenuBarController {
         quit.image = Self.symbol("power")
         menu.addItem(quit)
 
-        for item in [openControls, toggleItem, openFolder, openNotes, openBriefItem, providerSetup, quit] {
+        for item in [openControls, toggleItem, openFolder, openLibrary, openNotes, openBriefItem, providerSetup, quit] {
             item.target = self
         }
 
@@ -256,6 +265,7 @@ final class MenuBarController {
     @objc private func toggleClicked() { onToggle?() }
     @objc private func openControlsClicked() { onOpenControls?() }
     @objc private func openFolderClicked() { onOpenFolder?() }
+    @objc private func openLibraryClicked() { onOpenLibrary?() }
     @objc private func openNotesClicked() { onOpenNotes?() }
     @objc private func openBriefClicked() { onOpenBrief?() }
     @objc private func openBriefSessionClicked(_ sender: NSMenuItem) {

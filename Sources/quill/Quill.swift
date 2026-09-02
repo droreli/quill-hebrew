@@ -237,10 +237,15 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var globalRecordHotKey: GlobalHotKey?
     private var session: RecordingSession?
     private var latestSession: URL?
+    /// A user-selected completed session. It is intentionally distinct from
+    /// `latestSession`, which is only recording lifecycle bookkeeping.
+    private var selectedSession: URL?
     private var ticker: Timer?
     private lazy var notesWindow = MeetingNotesWindowController()
     private lazy var briefWindow = MeetingBriefWindowController(viewModel: briefViewModel)
     private lazy var providerSetup = ProviderSetupWindowController(configuration: Config.lmStudioProvider())
+    private lazy var meetingLibrary = MeetingLibraryWindowController(root: root)
+    private var hasOpenedMeetingLibrary = false
     private let briefViewModel = MeetingBriefViewModel()
     private var noteStore: SessionNoteStore?
     private var noteSessionID: String?
@@ -271,6 +276,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         menuBar.onToggle = { [weak self] in self?.toggle() }
         menuBar.onOpenControls = { [weak self] in self?.controls.show() }
         menuBar.onOpenFolder = { [weak self] in self?.openFolder() }
+        menuBar.onOpenLibrary = { [weak self] in self?.openMeetingLibrary() }
         menuBar.onOpenNotes = { [weak self] in self?.openNotes() }
         menuBar.onOpenBrief = { [weak self] in self?.openBrief() }
         menuBar.onOpenBriefSession = { [weak self] directory in self?.openBrief(for: directory) }
@@ -291,11 +297,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         controls.onToggleRecording = { [weak self] in self?.toggle() }
         controls.onOpenRecordings = { [weak self] in self?.openFolder() }
+        controls.onOpenLibrary = { [weak self] in self?.openMeetingLibrary() }
         controls.onOpenSession = { [weak self] in self?.openLatestSession() }
         controls.onOpenNotes = { [weak self] in self?.openNotes() }
         controls.onOpenBrief = { [weak self] in self?.openBrief() }
         controls.onOpenProviderSetup = { [weak self] in self?.providerSetup.show() }
         latestSession = Self.latestCompletedSession(in: root)
+        selectedSession = latestSession
         controls.update(isRecording: false, session: latestSession)
         refreshMeetingIntelligenceAvailability()
 
@@ -313,6 +321,11 @@ final class AppController: NSObject, NSApplicationDelegate {
         providerSetup.onCheckReadiness = { [weak self] configuration in
             self?.checkProviderReadiness(configuration)
         }
+        meetingLibrary.onSelectSession = { [weak self] directory in self?.selectMeeting(directory) }
+        meetingLibrary.onRevealSession = { directory in NSWorkspace.shared.open(directory) }
+        meetingLibrary.onOpenListeningCopy = { url in NSWorkspace.shared.open(url) }
+        meetingLibrary.onOpenNotes = { [weak self] directory in self?.openNotes(for: directory) }
+        meetingLibrary.onOpenBrief = { [weak self] directory in self?.openBrief(for: directory) }
 
         let transcriptionReference = AppControllerReference(self)
         Task { [transcription, root, transcriptionReference] in
@@ -373,6 +386,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             try newSession.start()
             session = newSession
             latestSession = newSession.dir
+            selectedSession = newSession.dir
             controls.update(isRecording: true, session: newSession.dir)
             bindLiveNotes(to: newSession)
             refreshMeetingIntelligenceAvailability()
@@ -404,6 +418,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         let dir = session.dir
         noteSessionEndedAt = Self.sessionTiming(in: dir)?.ended ?? Date()
         latestSession = dir
+        selectedSession = dir
         controls.update(isRecording: false, session: dir)
         refreshMeetingIntelligenceAvailability()
         Task { [transcription] in await transcription.enqueue(dir) }
@@ -443,6 +458,17 @@ final class AppController: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(latestSession)
     }
 
+    private func openMeetingLibrary() {
+        hasOpenedMeetingLibrary = true
+        meetingLibrary.updateRecordingState(session != nil)
+        meetingLibrary.show(selected: selectedSession ?? latestSession)
+    }
+
+    private func selectMeeting(_ directory: URL) {
+        selectedSession = directory
+        refreshMeetingIntelligenceAvailability()
+    }
+
     private func bindLiveNotes(to recording: RecordingSession) {
         let directory = recording.dir
         let identity = recording.sessionID
@@ -480,10 +506,11 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func openNotes() {
+    private func openNotes(for requestedDirectory: URL? = nil) {
+        if let requestedDirectory { selectMeeting(requestedDirectory) }
         if let session {
             if noteStore == nil { bindLiveNotes(to: session) }
-        } else if let directory = latestSession ?? Self.latestCompletedSession(in: root) {
+        } else if let directory = requestedDirectory ?? selectedSession ?? latestSession ?? Self.latestCompletedSession(in: root) {
             bindCompletedNotes(to: directory)
         }
         notesWindow.show()
@@ -664,7 +691,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             refreshMeetingIntelligenceAvailability()
             return
         }
-        guard let directory = requestedDirectory ?? latestSession ?? Self.latestCompletedSession(in: root) else {
+        guard let directory = requestedDirectory ?? selectedSession ?? latestSession ?? Self.latestCompletedSession(in: root) else {
             briefViewModel.update(state: .missing, rawNotes: nil, sessionDirectory: nil)
             briefWindow.show()
             return
@@ -675,7 +702,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             refreshMeetingIntelligenceAvailability()
             return
         }
-        if requestedDirectory == nil { latestSession = directory }
+        selectMeeting(directory)
         refreshBriefPresentation(for: directory)
         briefWindow.show()
     }
@@ -774,7 +801,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func refreshMeetingIntelligenceAvailability() {
-        let directory = session?.dir ?? latestSession ?? Self.latestCompletedSession(in: root)
+        let directory = session?.dir ?? selectedSession ?? latestSession ?? Self.latestCompletedSession(in: root)
         let transcriptReady = directory.map {
             FileManager.default.fileExists(atPath: $0.appendingPathComponent("transcript.json").path)
         } ?? false
@@ -784,10 +811,14 @@ final class AppController: NSObject, NSApplicationDelegate {
         )
         menuBar.updateBriefSessions(
             CompletedTranscriptSessions.directories(in: root),
-            selected: briefViewModel.sessionDirectory
+            selected: selectedSession
         )
         menuBar.updateBriefAvailability(availability)
         controls.updateMeetingIntelligence(isRecording: session != nil, session: directory)
+        if hasOpenedMeetingLibrary, meetingLibrary.isVisible {
+            meetingLibrary.updateRecordingState(session != nil)
+            meetingLibrary.refresh(selected: selectedSession)
+        }
         refreshMeetingPadStatus()
     }
 

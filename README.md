@@ -68,7 +68,9 @@ troubleshooting, see [docs/HEBREW_MLX_SETUP.md](docs/HEBREW_MLX_SETUP.md).
    automatically (the menu shows progress); a notification fires when the
    transcript is ready. Choose **Open controls…** from the feather menu before
    a meeting to select language, local engine, timestamps, visible speaker
-   labels, and optional mixed-audio listening copy.
+   labels, and optional mixed-audio listening copy. Choose **Meeting library…**
+   to browse any completed local session one at a time; its actions always use
+   the selected session, never an inferred latest transcript.
 
 Each session lands in `~/Recordings/<yyyy.MM.dd-HHmm>/`:
 
@@ -135,6 +137,21 @@ notes with meeting-relative timestamps. After a `transcript.json` exists, open
 canonical transcript and a frozen raw-note revision, keeps raw notes separate
 from generated content, and has no cloud fallback, accounts, telemetry, or
 automatic sharing.
+
+### Meeting library and live-transcription boundary
+
+The native **Meeting library** lists every completed recording, including ones
+still waiting for transcription. Select a session to inspect its transcript
+state, source-track and optional listening-copy availability, and whether a
+brief exists. From that detail, open its notes or its brief; regenerating a
+brief always uses that selected session’s canonical transcript and notes.
+
+Quill does not currently show live transcript text while a recording is in
+progress. This is deliberate: the default Hebrew MLX route is process-per-call
+and a 15-second loop would reload the model or re-read growing audio, risking
+the final canonical transcription. See
+[Incremental local transcription limits](docs/LIVE_TRANSCRIPTION_LIMITS.md)
+for the required safe architecture and M5/64 GB operating envelope.
 
 The LM Studio provider is opt-in and literal-loopback only
 (`127.0.0.1` or `::1`); Quill will never manage LM Studio or its models. The
