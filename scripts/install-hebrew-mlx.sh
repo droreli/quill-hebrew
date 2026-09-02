@@ -34,7 +34,7 @@ fi
 
 "$quill_venv/bin/python" -m pip install --upgrade pip
 "$quill_venv/bin/python" -m pip install --upgrade "mlx-whisper" "huggingface_hub[hf_xet]"
-"$quill_venv/bin/huggingface-cli" download --local-dir "$model_dir" "$model_repo"
+"$quill_venv/bin/hf" download --local-dir "$model_dir" "$model_repo"
 
 "$quill_venv/bin/python" - "$config_file" "$quill_venv/bin/python" "$model_dir" <<'PY'
 import json

@@ -193,7 +193,7 @@ enum Config {
             return URL(fileURLWithPath: (configured as NSString).expandingTildeInPath)
         }
         return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("venvs/mlx-whisper/bin/python")
+            .appendingPathComponent(".local/share/quill-hebrew/mlx-whisper/bin/python")
     }
 
     static func mlxModelDirectory() -> URL {
@@ -202,7 +202,7 @@ enum Config {
         }
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(
-                ".cache/huggingface/hub/models--mlx-community--ivrit-ai-whisper-large-v3-turbo-mlx/snapshots/53ad8c6cd8b32eb0303f093a404ae13c1b1d567f",
+                "Library/Application Support/quill-hebrew/models/ivrit-ai-whisper-large-v3-turbo-mlx",
                 isDirectory: true
             )
     }

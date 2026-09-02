@@ -40,10 +40,14 @@ struct PromptBuilder: Sendable {
     let model: String
     let messages: [Message]
     let temperature: Double
+    let maxTokens: Int
+    let reasoningEffort: String
     let responseFormat: ResponseFormat
 
     enum CodingKeys: String, CodingKey {
       case model, messages, temperature
+      case maxTokens = "max_tokens"
+      case reasoningEffort = "reasoning_effort"
       case responseFormat = "response_format"
     }
   }
@@ -89,7 +93,12 @@ struct PromptBuilder: Sendable {
       CANONICAL TRANSCRIPT SEGMENTS:
       \(transcript)
       """
-    return try encodeRequest(modelID: modelID, prompt: prompt, schemaName: "quill_chunk_brief")
+    return try encodeRequest(
+      modelID: modelID,
+      prompt: prompt,
+      schemaName: "quill_chunk_brief",
+      allowedEvidenceIDs: chunk.segments.map(\.id)
+    )
   }
 
   func reductionRequest(
@@ -107,7 +116,16 @@ struct PromptBuilder: Sendable {
       PARTIAL BRIEFS:
       \(partialJSON)
       """
-    return try encodeRequest(modelID: modelID, prompt: prompt, schemaName: "quill_meeting_brief")
+    let allowedEvidenceIDs = partials.flatMap { partial in
+      (partial.topics + partial.decisions + partial.openQuestions).flatMap(\.evidenceSegmentIDs)
+        + partial.actionItems.flatMap(\.evidenceSegmentIDs)
+    }
+    return try encodeRequest(
+      modelID: modelID,
+      prompt: prompt,
+      schemaName: "quill_meeting_brief",
+      allowedEvidenceIDs: allowedEvidenceIDs
+    )
   }
 
   /// Keeps each reduction request within a deterministic local budget. The
@@ -179,7 +197,12 @@ struct PromptBuilder: Sendable {
     )
   }
 
-  private func encodeRequest(modelID: String, prompt: String, schemaName: String) throws -> Data {
+  private func encodeRequest(
+    modelID: String,
+    prompt: String,
+    schemaName: String,
+    allowedEvidenceIDs: [String]
+  ) throws -> Data {
     let request = ChatRequest(
       model: modelID,
       messages: [
@@ -191,9 +214,20 @@ struct PromptBuilder: Sendable {
         .init(role: "user", content: prompt),
       ],
       temperature: 0,
+      // Meeting extraction is a bounded formatting task. Gemma 4 enables
+      // thinking by default; with a small local context it can spend the
+      // entire completion budget in reasoning_content and return empty
+      // assistant content. Disable reasoning so the constrained JSON is the
+      // actual completion, and cap output to keep every request bounded.
+      maxTokens: 2_048,
+      reasoningEffort: "none",
       responseFormat: .init(
         type: "json_schema",
-        jsonSchema: .init(name: schemaName, strict: true, schema: BriefResponseDecoder.jsonSchema))
+        jsonSchema: .init(
+          name: schemaName,
+          strict: true,
+          schema: BriefResponseDecoder.jsonSchema(allowedEvidenceIDs: allowedEvidenceIDs)
+        ))
     )
     return try JSONEncoder().encode(request)
   }

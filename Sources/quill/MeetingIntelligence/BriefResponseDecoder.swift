@@ -147,46 +147,56 @@ struct BriefResponseDecoder: Sendable {
         }
     }
 
-    static let jsonSchema: JSONValue = .object([
-        "type": .string("object"),
-        "additionalProperties": .boolean(false),
-        "required": .array([.string("language"), .string("overview"), .string("topics"), .string("decisions"), .string("action_items"), .string("open_questions"), .string("warnings")]),
-        "properties": .object([
-            "language": .object(["type": .string("string")]),
-            "overview": .object(["type": .string("string")]),
-            "topics": itemArraySchema,
-            "decisions": itemArraySchema,
-            "action_items": actionArraySchema,
-            "open_questions": itemArraySchema,
-            "warnings": .object(["type": .string("array"), "items": .object(["type": .string("string")])]),
-        ]),
-    ])
-
-    private static let itemArraySchema: JSONValue = .object([
-        "type": .string("array"),
-        "items": .object([
-            "type": .string("object"), "additionalProperties": .boolean(false),
-            "required": .array([.string("id"), .string("text"), .string("evidence_segment_ids")]),
+    static func jsonSchema(allowedEvidenceIDs: [String]) -> JSONValue {
+        let evidenceIDSchema: JSONValue = .object([
+            "type": .string("string"),
+            "enum": .array(Array(Set(allowedEvidenceIDs)).sorted().map(JSONValue.string)),
+        ])
+        return .object([
+            "type": .string("object"),
+            "additionalProperties": .boolean(false),
+            "required": .array([.string("language"), .string("overview"), .string("topics"), .string("decisions"), .string("action_items"), .string("open_questions"), .string("warnings")]),
             "properties": .object([
-                "id": .object(["type": .string("string")]),
-                "text": .object(["type": .string("string")]),
-                "evidence_segment_ids": .object(["type": .string("array"), "minItems": .integer(1), "items": .object(["type": .string("string")])]),
+                "language": .object(["type": .string("string")]),
+                "overview": .object(["type": .string("string")]),
+                "topics": itemArraySchema(evidenceIDSchema: evidenceIDSchema),
+                "decisions": itemArraySchema(evidenceIDSchema: evidenceIDSchema),
+                "action_items": actionArraySchema(evidenceIDSchema: evidenceIDSchema),
+                "open_questions": itemArraySchema(evidenceIDSchema: evidenceIDSchema),
+                "warnings": .object(["type": .string("array"), "items": .object(["type": .string("string")])]),
             ]),
-        ]),
-    ])
+        ])
+    }
 
-    private static let actionArraySchema: JSONValue = .object([
-        "type": .string("array"),
-        "items": .object([
-            "type": .string("object"), "additionalProperties": .boolean(false),
-            "required": .array([.string("id"), .string("text"), .string("owner"), .string("due_date"), .string("evidence_segment_ids")]),
-            "properties": .object([
-                "id": .object(["type": .string("string")]),
-                "text": .object(["type": .string("string")]),
-                "owner": .object(["type": .array([.string("string"), .string("null")])]),
-                "due_date": .object(["type": .array([.string("string"), .string("null")])]),
-                "evidence_segment_ids": .object(["type": .string("array"), "minItems": .integer(1), "items": .object(["type": .string("string")])]),
+    private static func itemArraySchema(evidenceIDSchema: JSONValue) -> JSONValue {
+        .object([
+            "type": .string("array"),
+            "items": .object([
+                "type": .string("object"), "additionalProperties": .boolean(false),
+                "required": .array([.string("id"), .string("text"), .string("evidence_segment_ids")]),
+                "properties": .object([
+                    "id": .object(["type": .string("string")]),
+                    "text": .object(["type": .string("string")]),
+                    "evidence_segment_ids": .object(["type": .string("array"), "minItems": .integer(1), "items": evidenceIDSchema]),
+                ]),
             ]),
-        ]),
-    ])
+        ])
+    }
+
+    private static func actionArraySchema(evidenceIDSchema: JSONValue) -> JSONValue {
+        .object([
+            "type": .string("array"),
+            "items": .object([
+                "type": .string("object"), "additionalProperties": .boolean(false),
+                "required": .array([.string("id"), .string("text"), .string("owner"), .string("due_date"), .string("evidence_segment_ids")]),
+                "properties": .object([
+                    "id": .object(["type": .string("string")]),
+                    "text": .object(["type": .string("string")]),
+                    "owner": .object(["type": .array([.string("string"), .string("null")])]),
+                    "due_date": .object(["type": .array([.string("string"), .string("null")])]),
+                    "evidence_segment_ids": .object(["type": .string("array"), "minItems": .integer(1), "items": evidenceIDSchema]),
+                ]),
+            ]),
+        ])
+    }
 }

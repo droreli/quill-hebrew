@@ -35,6 +35,11 @@ transcription speed.
 ### Enable the local Hebrew MLX engine
 
 The local English engine is **Parakeet TDT 0.6B v2** via FluidAudio/Core ML.
+It is not Apple's built-in speech recognizer: it is a third-party model running
+fully on-device through Apple's Core ML runtime. Quill keeps it as the
+English-only default because FluidAudio recommends v2 for English and reports
+2.1% average WER and 145.8x overall real-time throughput on its M4 Pro
+[benchmark](https://github.com/FluidInference/FluidAudio/blob/main/Documentation/Benchmarks.md).
 This fork is configured for local Hebrew transcription via
 `mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx`, an MLX conversion of the
 Apache-2.0 `ivrit-ai/whisper-large-v3-turbo` model. The setup is a one-time
@@ -135,6 +140,10 @@ The LM Studio provider is opt-in and literal-loopback only
 (`127.0.0.1` or `::1`); Quill will never manage LM Studio or its models. The
 initial personal recommendation, `google/gemma-4-26b-a4b-qat`, is configurable
 and recorded with **reported**, not checksum-verified, runtime provenance.
+For this model, load a 16,384-token context in LM Studio. Quill disables model
+thinking for this bounded structured-output task, constrains evidence IDs to
+the actual transcript, caps each completion, and allows up to five minutes per
+local request.
 Read [Local Meeting Notes](docs/LOCAL_MEETING_NOTES.md) and
 [Privacy and consent](PRIVACY_AND_CONSENT.md) for the shipped flow, model
 boundary, retention, removal, recovery, and consent reminder.

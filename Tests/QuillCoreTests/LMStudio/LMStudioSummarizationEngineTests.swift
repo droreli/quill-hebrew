@@ -73,8 +73,27 @@ import Testing
     let body = try #require(requestBody(request))
     let object = try JSONSerialization.jsonObject(with: body) as? [String: Any]
     #expect(object?["model"] as? String == "local/test-model")
+    #expect(object?["max_tokens"] as? Int == 2_048)
+    #expect(object?["reasoning_effort"] as? String == "none")
     #expect(object?["response_format"] != nil)
+    let responseFormat = object?["response_format"] as? [String: Any]
+    let jsonSchema = responseFormat?["json_schema"] as? [String: Any]
+    let schema = jsonSchema?["schema"] as? [String: Any]
+    let properties = schema?["properties"] as? [String: Any]
+    let topics = properties?["topics"] as? [String: Any]
+    let topicItems = topics?["items"] as? [String: Any]
+    let topicProperties = topicItems?["properties"] as? [String: Any]
+    let evidence = topicProperties?["evidence_segment_ids"] as? [String: Any]
+    let evidenceItems = evidence?["items"] as? [String: Any]
+    let allowedEvidence = Set(evidenceItems?["enum"] as? [String] ?? [])
+    #expect(!allowedEvidence.isEmpty)
+    #expect(allowedEvidence.isSubset(of: Set(["s000001", "s000002"])))
   }
+}
+
+@Test func localGenerationHasAColdStartSafetyMargin() throws {
+  let configuration = try LMStudioConfiguration()
+  #expect(configuration.requestTimeout == 300)
 }
 
 @Test func chunkingPreservesSegmentBoundariesAndRefusesOversizedSegment() throws {

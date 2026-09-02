@@ -41,7 +41,7 @@ brew install ffmpeg
 python3 -m venv "$HOME/.local/share/quill-hebrew/mlx-whisper"
 "$HOME/.local/share/quill-hebrew/mlx-whisper/bin/pip" install --upgrade \
   "mlx-whisper" "huggingface_hub[hf_xet]"
-"$HOME/.local/share/quill-hebrew/mlx-whisper/bin/huggingface-cli" download \
+"$HOME/.local/share/quill-hebrew/mlx-whisper/bin/hf" download \
   --local-dir "$HOME/Library/Application Support/quill-hebrew/models/ivrit-ai-whisper-large-v3-turbo-mlx" \
   mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx
 ```

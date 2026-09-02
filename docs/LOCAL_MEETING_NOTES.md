@@ -96,6 +96,21 @@ runtime provenance** only. It does not prove the installed weights or their
 checksum. Do not treat a reported model name as checksum-verified provenance;
 that requires a separate verified installation record.
 
+For the recommended model, load a 16,384-token context in LM Studio. With the
+`lms` CLI installed, one explicit example is:
+
+```sh
+lms load google/gemma-4-26b-a4b-qat --context-length 16384 --ttl 3600
+```
+
+Quill sends `reasoning_effort: none` because meeting extraction is a bounded
+formatting task: default model thinking can consume the completion window and
+leave the structured response empty. Each completion is capped at 2,048 tokens,
+evidence identifiers are restricted to identifiers present in the current
+transcript, and the per-request timeout is five minutes. Longer meetings remain
+bounded through transcript-aligned extraction and hierarchical reduction; a
+64K context is not required for this pipeline.
+
 Because the model is installed outside Quill, review its distributor, license,
 revision, size, storage location, and any supplied checksum before using it.
 Quill does not download or verify those weights. After the user has installed

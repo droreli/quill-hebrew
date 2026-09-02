@@ -50,7 +50,7 @@ struct LMStudioConfiguration: Sendable, Equatable {
         endpoint: String = "http://127.0.0.1:1234",
         modelID: String = LMStudioConfiguration.initialModelID,
         isEnabled: Bool = false,
-        requestTimeout: TimeInterval = 90,
+        requestTimeout: TimeInterval = 300,
         maximumResponseBytes: Int = 1_000_000,
         chunkTokenBudget: Int = 6_000
     ) throws {
