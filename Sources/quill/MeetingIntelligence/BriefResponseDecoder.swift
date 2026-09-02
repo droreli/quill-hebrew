@@ -169,6 +169,8 @@ struct BriefResponseDecoder: Sendable {
         transcript: SessionTranscript,
         input: SummaryInput,
         configuration: LMStudioConfiguration,
+        overviewSupport: BriefClaimSupport = .aiGeneratedRequiresReview,
+        warnings: [String] = [],
         createdAt: String = ISO8601DateFormatter().string(from: Date()),
         id: String = UUID().uuidString
     ) throws -> MeetingBrief {
@@ -210,14 +212,14 @@ struct BriefResponseDecoder: Sendable {
             inputs: input,
             generator: generator,
             overview: payload.overview,
-            overviewSupport: .aiGeneratedRequiresReview,
+            overviewSupport: overviewSupport,
             topics: topics,
             decisions: decisions,
             actionItems: actions,
             openQuestions: questions,
-            // Model warnings are free-form claims as well. Keep only Quill's
-            // mandatory, deterministic review warning in the published brief.
-            warnings: []
+            // Model warnings are free-form claims and are never published.
+            // Quality-gate warnings are deterministic system notices.
+            warnings: warnings
         )
         try brief.validateEvidence(against: transcript)
         return brief
@@ -263,7 +265,7 @@ struct BriefResponseDecoder: Sendable {
                 "properties": .object([
                     "id": .object(["type": .string("string")]),
                     "text": .object(["type": .string("string")]),
-                    "evidence_segment_ids": .object(["type": .string("array"), "minItems": .integer(1), "items": evidenceIDSchema]),
+                    "evidence_segment_ids": .object(["type": .string("array"), "minItems": .integer(1), "maxItems": .integer(2), "items": evidenceIDSchema]),
                 ]),
             ]),
         ])
@@ -280,7 +282,7 @@ struct BriefResponseDecoder: Sendable {
                     "text": .object(["type": .string("string")]),
                     "owner": .object(["type": .array([.string("string"), .string("null")])]),
                     "due_date": .object(["type": .array([.string("string"), .string("null")])]),
-                    "evidence_segment_ids": .object(["type": .string("array"), "minItems": .integer(1), "items": evidenceIDSchema]),
+                    "evidence_segment_ids": .object(["type": .string("array"), "minItems": .integer(1), "maxItems": .integer(2), "items": evidenceIDSchema]),
                 ]),
             ]),
         ])

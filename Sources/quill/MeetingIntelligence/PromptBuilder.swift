@@ -85,7 +85,7 @@ struct PromptBuilder: Sendable {
     let transcript = chunk.segments.map { "[\($0.id)] \($0.speaker): \($0.text)" }.joined(
       separator: "\n")
     let prompt = """
-      Create an evidence-grounded partial meeting brief for transcript chunk \(chunk.index + 1). Use only supplied transcript and raw notes. Preserve the meeting language. Do not invent facts, timestamps, owners, or due dates. Every item must cite one or more `evidence_segment_ids` from the supplied transcript IDs only. Unknown owner and due date must be null. Return JSON matching the schema exactly.
+      Create an evidence-grounded partial meeting brief for transcript chunk \(chunk.index + 1). Preserve the meeting language. The transcript is the only evidence and every generated claim must be directly supported by one or two supplied transcript IDs. Raw notes are user-owned context only: never copy, summarize, or turn a raw note into a topic, decision, action item, or open question. Use notes only to decide which independently supported transcript claims deserve attention. Do not invent facts, timestamps, owners, or due dates. An action item requires an explicit action plus a named owner found in the transcript or an unambiguous commitment in the cited transcript. Unknown owner and due date must be null. If the transcript cannot directly support a claim, return empty arrays rather than guessing. Return JSON matching the schema exactly.
 
       RAW NOTES (frozen revision \(rawNotes.revision)):
       \(notes)
@@ -108,7 +108,7 @@ struct PromptBuilder: Sendable {
     let partialJSON = String(decoding: partialData, as: UTF8.self)
     let notes = rawNotes.notes.map { "[\($0.id)] \($0.text)" }.joined(separator: "\n")
     let prompt = """
-      Reduce the supplied evidence-grounded partial briefs into one concise meeting brief. Use only their claims and evidence IDs; do not invent information. Keep every item evidence-backed, retain only stable segment IDs, and use null for unknown owner or due date. Treat partial item IDs as opaque labels, and generate unique item IDs within the returned brief. Return JSON matching the schema exactly.
+      Reduce the supplied evidence-grounded partial briefs into one concise meeting brief. Use only their claims and evidence IDs; do not invent information. Keep each item tied to one or two directly supporting segment IDs, omit any claim that resembles a raw note rather than transcript evidence, and use null for unknown owner or due date. An action item requires an explicit action plus a named owner found in evidence or an unambiguous commitment in evidence. Treat partial item IDs as opaque labels, and generate unique item IDs within the returned brief. Return JSON matching the schema exactly.
 
       RAW NOTES:
       \(notes)

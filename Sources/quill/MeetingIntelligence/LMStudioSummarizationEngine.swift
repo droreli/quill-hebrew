@@ -71,11 +71,18 @@ struct LMStudioSummarizationEngine: SummarizationEngine, Sendable {
         partials, transcript: transcript, rawNotes: rawNotes)
     }
     try Task.checkCancellation()
+    let quality = BriefQualityGate().evaluate(
+      finalPayload,
+      transcript: transcript,
+      rawNotes: rawNotes
+    )
     return try responseDecoder.makeMeetingBrief(
-      payload: finalPayload,
+      payload: quality.payload,
       transcript: transcript,
       input: input,
-      configuration: configuration
+      configuration: configuration,
+      overviewSupport: quality.overviewSupport,
+      warnings: quality.warnings
     )
   }
 

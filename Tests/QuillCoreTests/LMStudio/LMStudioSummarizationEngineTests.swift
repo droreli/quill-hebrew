@@ -110,7 +110,8 @@ import Testing
     transcript: transcript(), rawNotes: notes(), input: input())
 
   #expect(FakeLMStudioURLProtocol.requests(port: port).count == 1)
-  #expect(brief.overview == "No evidence-backed discussion was found.")
+  #expect(brief.overviewSupport == .quillSystemNotice)
+  #expect(brief.warnings.contains { $0.contains("No generated claims") })
   #expect(brief.topics.isEmpty)
   #expect(brief.decisions.isEmpty)
   #expect(brief.actionItems.isEmpty)

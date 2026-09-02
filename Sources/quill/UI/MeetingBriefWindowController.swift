@@ -244,14 +244,14 @@ final class MeetingBriefWindowController: NSWindowController {
         return card(
             symbolName: "note.text",
             title: "Your raw notes",
-            subtitle: "Read-only source notes. Generated content never changes these notes.",
+            subtitle: "Read-only source notes. They guide review but are never automatically promoted into tasks, decisions, or generated claims.",
             body: vertical(rows, spacing: 10),
             accessibilityLabel: "Your raw notes, read only"
         )
     }
 
     private func briefCard(_ brief: MeetingBrief) -> NSView {
-        var sections: [NSView] = [overviewSection(brief.overview)]
+        var sections: [NSView] = [overviewSection(brief.overview, support: brief.overviewSupport)]
         sections.append(itemSection("Key topics", symbolName: "bubble.left.and.bubble.right", items: brief.topics))
         sections.append(itemSection("Decisions", symbolName: "checkmark.seal", items: brief.decisions))
         sections.append(actionsSection(brief.actionItems))
@@ -260,15 +260,26 @@ final class MeetingBriefWindowController: NSWindowController {
         sections.append(provenanceSection(brief))
         return card(
             symbolName: "sparkles",
-            title: "Generated meeting brief",
-            subtitle: "AI-generated from the canonical transcript and the recorded source revision.",
+            title: brief.overviewSupport == .quillSystemNotice ? "Meeting brief coverage" : "Generated meeting brief",
+            subtitle: brief.overviewSupport == .quillSystemNotice
+                ? "Quill could not publish a reliable generated summary from this transcript. Your raw notes remain available above."
+                : "AI-generated from the canonical transcript and the recorded source revision.",
             body: vertical(sections, spacing: 16),
             accessibilityLabel: "Generated meeting brief, read only"
         )
     }
 
-    private func overviewSection(_ overview: String) -> NSView {
-        section("Overview", symbolName: "text.alignleft", body: wrappingText(overview.isEmpty ? "No overview was generated." : overview, size: 13, color: overview.isEmpty ? .secondaryLabelColor : .labelColor))
+    private func overviewSection(_ overview: String, support: BriefClaimSupport) -> NSView {
+        let isNotice = support == .quillSystemNotice
+        return section(
+            isNotice ? "Coverage notice" : "Overview",
+            symbolName: isNotice ? "exclamationmark.triangle" : "text.alignleft",
+            body: wrappingText(
+                overview.isEmpty ? "No overview was generated." : overview,
+                size: 13,
+                color: isNotice || overview.isEmpty ? .secondaryLabelColor : .labelColor
+            )
+        )
     }
 
     private func itemSection(_ title: String, symbolName: String, items: [BriefItem]) -> NSView {
@@ -350,18 +361,21 @@ final class MeetingBriefWindowController: NSWindowController {
         if evidence.isEmpty {
             return text("No linked transcript evidence.", size: 11, weight: .medium, color: .systemOrange)
         }
-        return vertical(evidence.map { reference in
-            let button = EvidenceButton(reference: reference)
-            button.title = "Source \(reference.segmentID) · \(formattedTimestamp(reference.startMS)) · \(reference.speaker)"
-            button.target = self
-            button.action = #selector(showEvidence(_:))
-            button.bezelStyle = .inline
-            button.font = .systemFont(ofSize: 11, weight: .medium)
-            button.contentTintColor = .controlAccentColor
-            button.setAccessibilityLabel("Show transcript evidence \(reference.segmentID), at \(formattedTimestamp(reference.startMS)), speaker \(reference.speaker)")
-            button.setAccessibilityHelp("Opens this source reference in the transcript viewer.")
-            return button
-        }, spacing: 2)
+        let references = evidence.reduce(into: [EvidenceReference]()) { result, reference in
+            if !result.contains(where: { $0.segmentID == reference.segmentID }) { result.append(reference) }
+        }
+        let first = references[0]
+        let suffix = references.count > 1 ? " + \(references.count - 1) more" : ""
+        let button = EvidenceButton(references: references)
+        button.title = "Evidence · \(formattedTimestamp(first.startMS)) · \(first.speaker)\(suffix)"
+        button.target = self
+        button.action = #selector(showEvidence(_:))
+        button.bezelStyle = .inline
+        button.font = .systemFont(ofSize: 11, weight: .medium)
+        button.contentTintColor = .controlAccentColor
+        button.setAccessibilityLabel("Show \(references.count) linked transcript source\(references.count == 1 ? "" : "s"), beginning at \(formattedTimestamp(first.startMS))")
+        button.setAccessibilityHelp("Opens the transcript viewer with the linked source references.")
+        return button
     }
 
     private func stateCard(symbolName: String, title: String, detail: String, tone: NSColor = .controlAccentColor, progress: Bool = false) -> NSView {
@@ -498,15 +512,15 @@ final class MeetingBriefWindowController: NSWindowController {
     @objc private func revealSession() { onReveal?() }
 
     @objc private func showEvidence(_ sender: EvidenceButton) {
-        onShowEvidence?([sender.reference])
+        onShowEvidence?(sender.references)
     }
 }
 
 private final class EvidenceButton: NSButton {
-    let reference: EvidenceReference
+    let references: [EvidenceReference]
 
-    init(reference: EvidenceReference) {
-        self.reference = reference
+    init(references: [EvidenceReference]) {
+        self.references = references
         super.init(frame: .zero)
     }
 
